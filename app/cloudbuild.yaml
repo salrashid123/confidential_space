@@ -1,0 +1,52 @@
+steps:
+
+  - name: gcr.io/cloud-builders/bazel@sha256:f00a985c3196cc58819b6f7e8e40353273bc20e8f24b54d9c92d5279bb5b3fad
+    id: build
+    args: ['run', '--platforms=@io_bazel_rules_go//go/toolchain:linux_amd64', ':server']
+
+  - name: gcr.io/cloud-builders/docker
+    id: tag
+    args: ['tag', 'us-central1-docker.pkg.dev/builder-project/repo1/myimage:server', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server']
+    waitFor: ['build']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server']
+    waitFor: ['tag']
+
+  - id: attestations
+    name: ubuntu
+    entrypoint: bash
+    args:
+      - -c
+      - |
+
+        echo -n '{ "projectid": "$PROJECT_ID", "buildid": "$BUILD_ID", "foo":"bar", "commitsha": "$COMMIT_SHA" }' > /workspace/predicates.json
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: sign_kms  
+    args:
+    - sign
+    - --annotations=key1=value1
+    - --key
+    - gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server
+    waitFor: ['push']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: attest_kms
+    args:
+    - attest  
+    - --key
+    - gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1
+    - --predicate=/workspace/predicates.json
+    - -y
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server
+    waitFor: ['push','sign_kms']
+
+
+serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cosign@$PROJECT_ID.iam.gserviceaccount.com'
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'N1_HIGHCPU_32'
+
