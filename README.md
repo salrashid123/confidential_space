@@ -1033,9 +1033,10 @@ Some notes and extras:
 
 You can use a similar technique describe above with [Bigquery ML](https://cloud.google.com/bigquery-ml/docs/introduction).  
 
-In this mode, each collaborator provides access to the encrypted training data datasets to the operator.  The operator trains an ML model using both collaborator's data.
+There are several options available in this mode:
 
->> note, the trained model will be visible to the operator since the model is created in the operator's bigquery project.
+a. `collaborator-1`, `collaborator-2` each provides sensitive _data_ which the `operator` (or even a new `collaborator-3`) who can use that to _train_ an ML Model.  The model would be owned by the project where the training occurs (eg, either the `operator` or `collaborator-3`)
+b. TEE runs `ML.PREDICT()` given sensitive data that over an already trained model that not even the operator has access to. 
 
 For a contrived end-to-end example where a BQML model is generated with this technique, see [Bigquery ML over AEAD encrypted data](https://gist.github.com/salrashid123/12243b99771d22ed4d02a6f1094f624a)
 
