@@ -63,6 +63,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using BigQuery](#using-bigquery)
   - [Using BigQuery ML](#using-bigquery-ml)  
   - [Using CloudSQL](#using-cloudsql)
+  - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
 
 ---
@@ -1133,6 +1134,82 @@ postgres=> select collaborator1.username, collaborator2.username from collaborat
 ----------+----------
  bob      | mike
 (1 row)
+```
+#### Using WebAssembly to run Sensitive Container Code
+
+In certain cases, the actual code that is executed inside the container maybe considered sensitive (eg, some specific formula, ML model, etc).
+
+If this is the case, you do not want the Operator to have access to download the container image at all.   In this repo, the operator was already given access to the image through the binding:
+
+```bash
+gcloud artifacts repositories add-iam-policy-binding repo1 \
+    --location=us-central1  \
+    --member=serviceAccount:operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
+    --role=roles/artifactregistry.reader
+```
+
+One option to workaround this is to only have the sensitive code available inside the container only _after_ the container uses the TEE Attestation token to download and run the code.
+
+For example, consider the following code snippet which uses [wasmer](https://github.com/wasmerio/wasmer-go) (a go runtime for webassembly)
+
+The sensitive data would be the `add()` typescript function thats compiled into webassembly and saved as the `hello-world.wasm` file in a secure GCS bucket owned by the owners of the IP.
+
+When the TEE image starts up, it acquires its attestation token and uses workload federation to access the wasm file from the owners of the IP (i.e replace the `ioutil.ReadFile` with [object reader](https://pkg.go.dev/google.golang.org/cloud/storage#hdr-Objects))
+
+```golang
+package main
+
+/*
+$ cat helloworld.ts 
+export function add(a: i32, b: i32): i32 {
+    return a + b;
+}
+
+$ npm install -g assemblyscript
+$ asc helloworld.ts -o hello-world.wasm
+$ go run main.go
+
+*/
+
+import (
+	"fmt"
+	"io/ioutil"
+
+	wasmer "github.com/wasmerio/wasmer-go/wasmer"
+)
+
+func main() {
+	wasmBytes, err := ioutil.ReadFile("hello-world.wasm")
+	if err != nil {
+		panic(err)
+	}
+	engine := wasmer.NewEngine()
+	store := wasmer.NewStore(engine)
+
+	// Compiles the module
+	module, err := wasmer.NewModule(store, wasmBytes)
+	if err != nil {
+		panic(err)
+	}
+	// Instantiates the module
+	importObject := wasmer.NewImportObject()
+	instance, err := wasmer.NewInstance(module, importObject)
+	if err != nil {
+		panic(err)
+	}
+	// Gets the `add` exported function from the WebAssembly instance.
+	add, err := instance.Exports.GetFunction("add")
+	if err != nil {
+		panic(err)
+	}
+	// Calls that exported function with Go standard values. The WebAssembly
+	// types are inferred and values are casted automatically.
+	result, err := add(1, 5)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(result)
+}
 ```
 
 #### Check Cosign Signature and Attestation at Runtime
