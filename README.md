@@ -1215,6 +1215,34 @@ func main() {
 }
 ```
 
+Note, in python, you _maybe_ able to use a library to enclose the class using [dill](https://dill.readthedocs.io/en/latest/)
+
+
+```python
+#!/usr/bin/python
+import dill  
+
+# to serialize, uncomment 
+# class RCE:
+#     import os
+#     def __init__(self, v="foo"):
+#       self._v = v
+#     def sq(self, n):
+#         return n*n
+
+# with open('p.bin', 'wb') as s:
+#   dill.dump(RCE(), s)
+
+
+# to deserialize, comment the steps above and run
+with open("p.bin", mode='rb') as s:
+    r = dill.load(s)
+    print(repr(r))
+    print(r.sq(2))
+```
+
+Though realistically, if your'e dealing with an ML model you deem sensitive, maybe a better way would be to [export import a tensosorflow model](https://www.tensorflow.org/hub/exporting_tf2_saved_model) (i'm not familiar with TF so i don't know how this is done..)
+
 #### Check Cosign Signature and Attestation at Runtime
 
 Confidential space does not currently verify if the image being deployed was signed by various parties with any attestations.
