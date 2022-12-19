@@ -64,6 +64,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using BigQuery ML](#using-bigquery-ml)  
   - [Using CloudSQL](#using-cloudsql)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
+  - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
 
 ---
@@ -490,7 +491,15 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
 
 Important: use `int(assertion.swversion) >= 1` for the pool definition for production  if you want to prevent the operator running the debug image family (`--image-family=confidential-space-debug`) **which allows SSH**.  The `swversion` is >=1 for non-debug (debug has `swversion: 0`)
 
-At this point, the collaborator will only release access to a KMS key if they see a request originating from a trusted Confidential Space VM the operator runs and at that, from a specific image hash they had earlier trusted and authorized
+At this point, the collaborator will only release access to a KMS key if they see a request originating from a trusted Confidential Space VM the operator runs and at that, from a specific image hash they had earlier trusted and authorized.
+
+In other words, the use of the KMS key is now bound to the operator's project when it uses a confidential compute VM and furthermore, when the attestation token indicates the trusted image is used.  
+
+Access is granted to an identity bound to the image:
+
+```bash
+principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:c693f5cf4f447b31e8c0ae7f784fc754f783f2e64f8836913c22264004204f6b
+```
 
 We could have configured the entire workload provider to mandate that any access to any resource must include that specific image has.  This demo, however, abstracts it to the resource (KMS key) binding.  This was done to allow more operational flexibility: if the image builder creates a new image hash, each collaborator can more easily replace the IAM binding on specific resources instead of redefining the entire providers constraints.
 
@@ -1141,7 +1150,9 @@ postgres=> select collaborator1.username, collaborator2.username from collaborat
 
 In certain cases, the actual code that is executed inside the container maybe considered sensitive (eg, some specific formula, ML model, etc).
 
-If this is the case, you do not want the Operator to have access to download the container image at all.   In this repo, the operator was already given access to the image through the binding:
+If this is the case, you do not want the Operator to have access to download the container image that includes this code in raw form.   
+
+In this repo, the operator was already given access to download the image through the IAM binding we performed earlier (i.,e the operator alrady controls this service account and can unilaterally download the container image):
 
 ```bash
 gcloud artifacts repositories add-iam-policy-binding repo1 \
@@ -1215,7 +1226,12 @@ func main() {
 }
 ```
 
-Note, in python, you _maybe_ able to use a library to enclose the class using [dill](https://dill.readthedocs.io/en/latest/)
+
+#### Running Sensitive Machine Learning Code
+
+If what the container runs is actually sensitive generic python or machine learning code (eg `Tensorflow` Model) which you do not want the operator to view, a model author can save an encrypted form of the machine learning model or code and only download or decrypt it after attestation.
+
+In this flow, suppose the following funciton `RCE()` is deemed sensitive, the author can use a library like [dill](https://dill.readthedocs.io/en/latest/) to serialize the class and then encrypt it with their KMS key.  The decryption and desrialization can occur within the TEE after attestation to the functions author which releases the KMS key
 
 
 ```python
@@ -1241,7 +1257,7 @@ with open("p.bin", mode='rb') as s:
     print(r.sq(2))
 ```
 
-Though realistically, if your'e dealing with an ML model you deem sensitive, maybe a better way would be to [export import a tensosorflow model](https://www.tensorflow.org/hub/exporting_tf2_saved_model) (i'm not familiar with TF so i don't know how this is done..)
+In a similar way, if you're dealing with an ML model you deem sensitive, you can also [export/import a tensosorflow model](https://www.tensorflow.org/tutorials/keras/save_and_load#save_the_entire_model).  For this, the entire model is saved or encrypted and only visible to the TEE after attestation (i'm not familiar with TF so i don't know if [this is how its done](https://gist.github.com/salrashid123/0e6f5a1a11bc12ab21306c1e1ce94fed)..)
 
 #### Check Cosign Signature and Attestation at Runtime
 
