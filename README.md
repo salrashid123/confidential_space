@@ -1068,84 +1068,11 @@ At the moment (11/16/22), GCP CloudSQL Postgres _does not allow_ you to set thes
 
 Once it does, GCP CloudSQL [does not allow superuser](https://cloud.google.com/sql/docs/postgres/users#superuser_restrictions) logins so one the settings above are verified, the client can submit the query (**NOTE**: take that with a big grain of salt; i do not know postgres and there maybe other vectors to surface the bind parameters)
 
-Anyway,  following the same technique as BQ, the column data for each collaborator is encrypted using their AES keys which each releases to the TEE
+Anyway,  following the same technique as BQ, the column data for each collaborator is encrypted using their AES keys which each releases to the TEE is described at
 
-The TEE then submits a query that will join the datasets together.
-
-for example, each table will use a different encryption key:
-
-* table1:  `collaborator1` will use encryption key of `1234`
-* table2:  `collaborator2` will use encryption key of `6789`
-
-Once data is inserted, run a sample query to join both tables to find the users that have a common fave animal.  
-
-The encryption keys are provided as part of the query
-
-For reference, see
-
-* [CloudSQL pgcrypto extension](https://cloud.google.com/sql/docs/postgres/extensions)
+* [Postgres Encrypted columns using pgcrypto on Google CloudSQL](https://gist.github.com/salrashid123/b8fb527c9577ceacb2c3fe5807eae98e)
 
 
-```sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-postgres=> SELECT * FROM pg_extension;
-  oid  | extname  | extowner | extnamespace | extrelocatable | extversion | extconfig | extcondition 
--------+----------+----------+--------------+----------------+------------+-----------+--------------
- 14352 | plpgsql  |       10 |           11 | f              | 1.0        |           | 
- 16465 | pgcrypto |    16388 |         2200 | t              | 1.3        |           | 
-
-
-CREATE TABLE collaborator1(username varchar(100) PRIMARY KEY, cryptpwd text);
-
-CREATE TABLE collaborator2(username varchar(100) PRIMARY KEY, cryptpwd text);
-
-INSERT INTO collaborator1(username, cryptpwd)   VALUES ('alice', encrypt('cat','1234','aes')),  ('bob',encrypt('dog','1234','aes'));
-
-INSERT INTO collaborator2(username, cryptpwd)   VALUES ('carol', encrypt('liger','6789','aes')),  ('eve',encrypt('rabbit','6789','aes')), ('mike',encrypt('dog','6789','aes'));
-
-
-
-postgres=> select username,  encode(cryptpwd::bytea, 'hex')  from collaborator1;
- username |              encode              
-----------+----------------------------------
- alice    | 6819a626975544f7da4368ebaf48b163
- bob      | 76a8cf5a52a2485fc88ddfdef90c9286
-
-
-
- select username,  convert_from(decrypt(cryptpwd::bytea ,'1234','aes'),'SQL_ASCII') from collaborator1;
- username | convert_from 
-----------+--------------
- alice    | cat
- bob      | dog
-
-
-
-postgres=> select username,  encode(cryptpwd::bytea, 'hex')  from collaborator2;
- username |              encode              
-----------+----------------------------------
- carol    | c18404370fdc5344957e75893ce25ed7
- eve      | 0a6b36489709a81c71179146d4c18bc5
- mike     | fae6fa23a462a003ca3453a013e8ff73
-
-
-postgres=> select username,  convert_from(decrypt(cryptpwd::bytea ,'6789','aes'),'SQL_ASCII') from collaborator2;
- username | convert_from 
-----------+--------------
- carol    | liger
- eve      | rabbit
- mike     | dog
-
-
-
-postgres=> select collaborator1.username, collaborator2.username from collaborator1, collaborator2 where decrypt(collaborator1.cryptpwd::bytea ,'1234','aes') = decrypt(collaborator2.cryptpwd::bytea ,'6789','aes');
-
- username | username 
-----------+----------
- bob      | mike
-(1 row)
-```
 #### Using WebAssembly to run Sensitive Container Code
 
 In certain cases, the actual code that is executed inside the container maybe considered sensitive (eg, some specific formula, ML model, etc).
