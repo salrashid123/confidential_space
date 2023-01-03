@@ -65,6 +65,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using CloudSQL](#using-cloudsql)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
+  - [Using Hashicorp Vault](#using-hashicorp-vault)
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
 
 ---
@@ -1185,6 +1186,79 @@ with open("p.bin", mode='rb') as s:
 ```
 
 In a similar way, if you're dealing with an ML model you deem sensitive, you can also [export/import a tensosorflow model](https://www.tensorflow.org/tutorials/keras/save_and_load#save_the_entire_model).  For this, the entire model is saved or encrypted and only visible to the TEE after attestation (i'm not familiar with TF so i don't know if [this is how its done](https://gist.github.com/salrashid123/0e6f5a1a11bc12ab21306c1e1ce94fed)..)
+
+#### Using Hashicorp Vault
+
+If you have an on-prem [Hashicorp Vault](https://www.vaultproject.io/) which saves encryption keys, you can access it from within the TEE by passing through a GCP KMS encrypted `VAULT_TOKEN`, unwrapping it within the TEE and accessing Vault using the.
+
+Alternatively, you can just use Vault's[JWT Auth](https://developer.hashicorp.com/vault/docs/auth/jwt) mechansim.
+
+In this mode, you use the TEE's attestation token and emit that to your vault server.  The vault server validates the TEE specicifcations and returns a `VAULT_TOKEN` for the TEE to use again.
+
+>> Note: you _are_ emitting the TEE's attestation token externally here.  Earlier on in this tutorial, we mentioned that you should not emit this token in a multiparty system (eg, to prevent replay or compromise another collaborator security).  However, if you are the _only_ collaborator, you can emit the token to your own VAULT server.
+
+Critically, also note that the TEE attestation token has a fixed audience value (`https://sts.googleapis.com`).  If you sent this TEE token to your vault server as-is, you are somewhat misusing the intent for that claim and token (i.,e its intended auidence is GCP's STS server; not your vault server). 
+
+Once Confidential Space allows custom audiences,  you can use this VAULT auth mechansim against multiple collaborators onprem server as well as GCP APIs since you can define your own audience settings.
+
+In short, its not recommened to use this mechanism but the following is there for completeness:
+
+Anyway, here is a sample Vault JWT configuration that would authorize a specific image similar to the workload federation done in this tutorial.
+
+```hcl
+vault write auth/jwt/config \
+    jwks_url="https://confidentialcomputing.googleapis.com/.well-known/jwks" \
+    bound_issuer="https://confidentialcomputing.googleapis.com/"
+```
+
+Vault operator defines fine-grained role that enforces the image policy
+
+```hcl
+vault write auth/jwt/role/my-jwt-role -<<EOF
+{
+  "role_type": "jwt",
+  "policies": ["token-policy","secrets-policy"],
+  "token_explicit_max_ttl": 60,
+  "user_claim": "sub",
+  "bound_audiences": ["https://sts.googleapis.com"],
+  "bound_subject": "https://www.googleapis.com/compute/v1/projects/vegas-codelab-5/zones/us-central1-a/instances/vm1",
+  "claims_mappings": {
+    "hwmodel": "hwmodel",
+    "swname": "swname",
+    "swversion": "swversion",
+    "/submods/container/image_digest": "/submods/container/image_digest",
+    "/submods/gce/project_id":"/submods/gce/project_id",
+    "google_service_accounts":"google_service_accounts"
+  },
+  "bound_claims": {
+    "hwmodel": "GCP_AMD_SEV",
+    "swname": "CONFIDENTIAL_SPACE",
+    "swversion": "1",
+    "/submods/container/image_digest": ["sha256:c693f5cf4f447b31e8c0ae7f784fc754f783f2e64f8836913c22264004204f6b"],
+    "/submods/gce/project_id": ["$OPERATOR_PROJECT_ID"],
+    "google_service_accounts":["operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com"]
+  }  
+}
+EOF
+```
+
+Exchange TEE Attestation token for an on-prem `VAULT_TOKEN`:
+
+- [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
+
+The equivalent usage with vault cli:
+
+```bash
+export VAULT_CACERT='/path/to/tls/ca.pem'
+export VAULT_ADDR='https://your_vault_server:443'
+export JWT_TOKEN=`cat /run/container_launcher/attestation_verifier_claims_token`
+export VAULT_TOKEN=`vault write -field="token" auth/jwt/login role=my-jwt-role jwt="$JWT_TOKEN"`
+echo $VAULT_TOKEN
+
+# now use the vault token to access a secret or key
+vault kv put kv/message foo=world
+vault kv get kv/message
+```
 
 #### Check Cosign Signature and Attestation at Runtime
 
