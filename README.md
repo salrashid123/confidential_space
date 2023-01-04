@@ -1244,14 +1244,14 @@ EOF
 
 Exchange TEE Attestation token for an on-prem `VAULT_TOKEN`:
 
-- [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
-
 The equivalent usage with vault cli:
 
 ```bash
 export VAULT_CACERT='/path/to/tls/ca.pem'
 export VAULT_ADDR='https://your_vault_server:443'
+
 export JWT_TOKEN=`cat /run/container_launcher/attestation_verifier_claims_token`
+
 export VAULT_TOKEN=`vault write -field="token" auth/jwt/login role=my-jwt-role jwt="$JWT_TOKEN"`
 echo $VAULT_TOKEN
 
@@ -1259,6 +1259,10 @@ echo $VAULT_TOKEN
 vault kv put kv/message foo=world
 vault kv get kv/message
 ```
+
+also see
+
+- [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
 
 #### Check Cosign Signature and Attestation at Runtime
 
