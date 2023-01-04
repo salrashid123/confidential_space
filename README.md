@@ -1189,9 +1189,9 @@ In a similar way, if you're dealing with an ML model you deem sensitive, you can
 
 #### Using Hashicorp Vault
 
-If you have an on-prem [Hashicorp Vault](https://www.vaultproject.io/) which saves encryption keys, you can access it from within the TEE by passing through a GCP KMS encrypted `VAULT_TOKEN`, unwrapping it within the TEE and accessing Vault using the.
+If you have an on-prem [Hashicorp Vault](https://www.vaultproject.io/) which saves encryption keys, you can access it from within the TEE by passing through a GCP KMS encrypted `VAULT_TOKEN`, unwrapping it within the TEE.
 
-Alternatively, you can just use Vault's[JWT Auth](https://developer.hashicorp.com/vault/docs/auth/jwt) mechansim.
+Alternatively, you can just use Vault's [JWT Auth](https://developer.hashicorp.com/vault/docs/auth/jwt) mechansim.
 
 In this mode, you use the TEE's attestation token and emit that to your vault server.  The vault server validates the TEE specicifcations and returns a `VAULT_TOKEN` for the TEE to use again.
 
