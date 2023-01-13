@@ -1037,7 +1037,9 @@ Some notes and extras:
 * [Bring your own Key for BigQuery SQL column-level encryption](https://blog.salrashid.dev/articles/2022/bq_kms/)
   
   BQ Column level encryption isn't practical here since it currently relies on KMS key access (i.,e the client that issues the BQ request must have access to _both_ provider's KMS keys used to encrypt the BQ data...This breaks some of the contracts and conditions we are using here)
-
+* [BigQuery Customer Managed Encryption Keys](https://cloud.google.com/bigquery/docs/customer-managed-encryption)
+  
+  BQ allows datasets encryption at rest using your own KMS keys.  However, this form of encryption does not really help here since the single serivce account that issues the BQ Query `bq-$OPERATOR_PROJECT_NUMBER@bigquery-encryption.iam.gserviceaccount.com` would need access to both CMEK encrypted dataset.  If that were the case, the operator could create any new VM, associate that service account to that VM and issue queries and read data against both collaborators datets in cleartext.
 
 #### Using BigQuery ML
 
