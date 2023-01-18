@@ -1279,8 +1279,8 @@ The following uses [go.dedis.ch/kyber](https://pkg.go.dev/go.dedis.ch/kyber) lib
 
 For use with KMS, each participant would encrypt the binary form of the marshalled key first and transmit that content to the TEE for decryption.
 
-* [Threshold Encryption](https://gist.github.com/salrashid123/c936fcbaa40c403232351f67c17ee12f)
-* [Threshold Signatures](https://gist.github.com/salrashid123/a871efff662a047257879ce7bffb9f13)
+* [Threshold Signatures](https://gist.github.com/salrashid123/c936fcbaa40c403232351f67c17ee12f)
+* [Threshold Encryption](https://gist.github.com/salrashid123/a871efff662a047257879ce7bffb9f13)
 
 #### Check Cosign Signature and Attestation at Runtime
 
