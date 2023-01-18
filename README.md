@@ -66,6 +66,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
   - [Using Hashicorp Vault](#using-hashicorp-vault)
+  - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)  
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
 
 ---
@@ -660,7 +661,7 @@ and the actual KMS access
 
 For the operator, you can enable vm logs for GCE
 
->> Important: these GCE logs are *NOT* audit logs and just plain VM logs...these can be created/faked by a user with log writer access manually so do not use them for a verifiable source of truth
+>> Important: these GCE logs are *NOT* audit logs and just plain VM logs...these can be [created/faked](https://gist.github.com/salrashid123/714a5b67f254eba6954333be8bc03c0c) by a user with log writer access manually so do not use them for a verifiable source of truth
 
 ![images/cc_startup.png](images/cc_startup.png)
 
@@ -1265,6 +1266,21 @@ vault kv get kv/message
 also see
 
 - [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
+
+#### Threshold Encryption and Signatures
+
+You can also easily use the TEE to perform [Threshold Cryptography](https://en.wikipedia.org/wiki/Threshold_cryptosystem) functions like signing or encryption/decryption.
+
+In this mode, each collaborator's threshold key is encrypted by their own KMS key and is decrypted within the TEE.
+
+Once the TEE receives the `t of n` keys, it can perform encryption or signing per key-type.
+
+The following uses [go.dedis.ch/kyber](https://pkg.go.dev/go.dedis.ch/kyber) library and writes the public and private keys in binary to a file.  
+
+For use with KMS, each participant would encrypt the binary form of the marshalled key first and transmit that content to the TEE for decryption.
+
+* [Threshold Encryption](https://gist.github.com/salrashid123/c936fcbaa40c403232351f67c17ee12f)
+* [Threshold Signatures](https://gist.github.com/salrashid123/a871efff662a047257879ce7bffb9f13)
 
 #### Check Cosign Signature and Attestation at Runtime
 
