@@ -63,6 +63,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using BigQuery](#using-bigquery)
   - [Using BigQuery ML](#using-bigquery-ml)  
   - [Using CloudSQL](#using-cloudsql)
+  - [Using SecretManager](#using-secretmanager)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
   - [Using Hashicorp Vault](#using-hashicorp-vault)
@@ -133,6 +134,7 @@ For more info, see
 - [Building deterministic Docker images with Bazel](https://blog.bazel.build/2015/07/28/docker_build.html)
 - [Deterministic container hashes and container signing using Cosign, Bazel and Google Cloud Build](https://github.com/salrashid123/cosign_bazel_cloud_build)
 - [Deterministic builds with go + bazel + grpc + docker](https://github.com/salrashid123/go-grpc-bazel-docker)
+- [Deterministic builds with nodejs + bazel + docker](https://github.com/salrashid123/nodejs-bazel-docker)
 - [Understanding workload identity federation](https://blog.salrashid.dev/articles/2021/understanding_workload_identity_federation/)
 
 Anyway, to setup,
@@ -1076,6 +1078,13 @@ Anyway,  following the same technique as BQ, the column data for each collaborat
 
 * [Postgres Encrypted columns using pgcrypto on Google CloudSQL](https://gist.github.com/salrashid123/b8fb527c9577ceacb2c3fe5807eae98e)
 
+#### Using SecretManager
+
+[SecretManager](https://cloud.google.com/secret-manager/docs/overview) can be used as an alternative to KMS encrypted keys if the nature of the sensitive data is more appropriate for secrets-based transfer rather than wrapped encryption.
+
+For example, suppose each collaborator's secret is actually a database passphrase or asymmetric key they save as versions in secret storage.  In this case, it probably makes more sense to save the sensitive data as a GCP Secret rather than transferring a wrapped KMS encrytped blob.
+
+To use SecretManager in this mode is trivial: simply substitute the KMS IAM authorization and API calls for SecretManager.
 
 #### Using WebAssembly to run Sensitive Container Code
 
