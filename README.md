@@ -295,10 +295,6 @@ which will exist as additional artifacts in the registry
 
 ![images/artifacts.png](images/artifacts.png)
 
-and manifest
-
-![images/manifest.png](images/manifest.png)
-
 ```bash
 # get the public key for the cosigned image
 gcloud kms keys versions get-public-key 1  \
@@ -358,9 +354,6 @@ The following checks were performed on each of these signatures:
   ]
 }
 
-
-
-
 ## if you decode the payload, you'll see the predicate and image attestations (build number, commit hash, timestamp)
 
 {
@@ -380,8 +373,6 @@ The following checks were performed on each of these signatures:
   }
 }
 ```
-
-![images/manifest_payload.png](images/manifest_payload.png)
 
 ### Operator
 
