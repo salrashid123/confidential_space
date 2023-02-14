@@ -23,7 +23,7 @@ container_image(
     cmd = [],
     labels = {
         "tee.launch_policy.allow_cmd_override": "false",
-        "tee.allow_stdout_echo": "true",
+        "tee.launch_policy.log_redirect": "always",
     },    
     files = [
         ":main",

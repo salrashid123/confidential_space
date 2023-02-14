@@ -31,7 +31,7 @@ var (
 
 const (
 	subscription = "cs-subscribe" // the subscription where both collaborators submit messages; you could also setup 1 topic/subscription for each collaborator as well
-	jwksURL      = "https://confidentialcomputing.googleapis.com/.well-known/jwks"
+	jwksURL      = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
 )
 
 func main() {
