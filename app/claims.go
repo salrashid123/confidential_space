@@ -38,9 +38,14 @@ type TEEClaims struct {
 	Emails    []string        `json:"emails,omitempty"`
 }
 
+type ConfidentialSpaceClaims struct {
+	SupportAttributes string `json:"support_attributes"`
+}
+
 type SubmodClaims struct {
-	Container ContainerClaims `json:"container"`
-	GCE       GCEClaims       `json:"gce"`
+	Container         ContainerClaims         `json:"container"`
+	GCE               GCEClaims               `json:"gce"`
+	ConfidentialSpace ConfidentialSpaceClaims `json:"confidential_space"`
 }
 
 type Claims struct {

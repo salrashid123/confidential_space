@@ -47,8 +47,11 @@ go_library(
         "@com_github_lestrrat_go_jwx//jwk:go_default_library",
         "@org_golang_google_api//option:go_default_library",
         "@com_google_cloud_go_pubsub//:go_default_library",
-        "@go_googleapis//google/cloud/kms/v1:kms_go_proto",       
-        "@com_google_cloud_go_kms//apiv1:go_default_library",        
+        "@com_google_cloud_go_kms//apiv1:go_default_library",
+        "@com_google_cloud_go_kms//apiv1/kmspb:go_default_library",
+        "@com_google_cloud_go_compute_metadata//:go_default_library",
+        "@com_google_cloud_go_logging//:go_default_library",
+        "@go_googleapis//google/api:monitoredres_go_proto",
     ],
 )
 

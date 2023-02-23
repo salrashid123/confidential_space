@@ -10,13 +10,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"log"
+
+	"cloud.google.com/go/compute/metadata"
 	kms "cloud.google.com/go/kms/apiv1"
+
+	"google.golang.org/genproto/googleapis/api/monitoredres"
+	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+
+	"cloud.google.com/go/logging"
 	"cloud.google.com/go/pubsub"
 	"github.com/golang-jwt/jwt"
 	"github.com/lestrrat/go-jwx/jwk"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
-	kmspb "google.golang.org/genproto/googleapis/cloud/kms/v1"
 )
 
 var (
@@ -32,15 +39,66 @@ var (
 const (
 	subscription = "cs-subscribe" // the subscription where both collaborators submit messages; you could also setup 1 topic/subscription for each collaborator as well
 	jwksURL      = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
+	logName      = "cs-log"
 )
 
 func main() {
 
 	flag.Parse()
 
+	ctx := context.Background()
+
+	// configure a logger client
+	logger := log.Default()
+
+	// try to derive the projectID from the default metadata server creds
+	creds, err := google.FindDefaultCredentials(ctx)
+	if err != nil {
+		logger.Fatalf("Error finding default credentials %v\n", err)
+	}
+
+	if creds.ProjectID == "" {
+		logger.Fatalf("error finding default projectID from credentials\n")
+	}
+
+	// if we're running on GCE Conf-space, use the cloud logging api instead of stdout/stderr
+	if metadata.OnGCE() {
+		logClient, err := logging.NewClient(ctx, creds.ProjectID)
+		if err != nil {
+			log.Fatalf("Failed to create client: %v", err)
+		}
+		defer logClient.Close()
+
+		// derive the projectID, instanceID and zone
+		//  these three are used to 'label' the log lines back to the specific gce_instance logs
+		p, err := metadata.ProjectID()
+		if err != nil {
+			log.Fatalf("Failed to get projectID from metadata server: %v", err)
+		}
+		i, err := metadata.InstanceID()
+		if err != nil {
+			log.Fatalf("Failed to get instanceID from metadata server: %v", err)
+		}
+		z, err := metadata.Zone()
+		if err != nil {
+			log.Fatalf("Failed to get zone from metadata server: %v", err)
+		}
+
+		m := make(map[string]string)
+		m["project_id"] = p
+		m["instance_id"] = i
+		m["zone"] = z
+		logger = logClient.Logger(logName, logging.CommonResource(
+			&monitoredres.MonitoredResource{
+				Type:   "gce_instance",
+				Labels: m,
+			},
+		)).StandardLogger(logging.Info)
+	}
+
 	c1_cred, err := os.ReadFile(*config)
 	if err != nil {
-		fmt.Println("error reading  config file")
+		logger.Println("error reading  config file")
 		os.Exit(1)
 	}
 
@@ -48,24 +106,24 @@ func main() {
 
 	err = json.Unmarshal(c1_cred, &config)
 	if err != nil {
-		fmt.Println("error parsing config file")
+		logger.Println("error parsing config file")
 		os.Exit(1)
 	}
 
-	fmt.Printf("Config file %v\n", config)
+	logger.Printf("Config file %v\n", config)
 
 	// print the attestation JSON
 
 	attestation_encoded, err := os.ReadFile(*attestation_token_path)
 	if err != nil {
-		fmt.Println("error reading attestation file")
+		logger.Println("error reading attestation file")
 		os.Exit(1)
 	}
 
-	//fmt.Printf("Raw TOKEN (do not do this in real life!  [%s]\n", string(attestation_encoded))
+	//logger.Printf("Raw TOKEN (do not do this in real life!  [%s]\n", string(attestation_encoded))
 	jwtSet, err := jwk.FetchHTTP(jwksURL)
 	if err != nil {
-		fmt.Printf("Unable to load JWK Set: %v", err)
+		logger.Printf("Unable to load JWK Set: %v", err)
 		os.Exit(1)
 	}
 
@@ -82,49 +140,32 @@ func main() {
 		return nil, errors.New("unable to find key")
 	})
 	if err != nil {
-		fmt.Printf("     Error parsing JWT %v", err)
+		logger.Printf("     Error parsing JWT %v", err)
 		os.Exit(1)
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
-		fmt.Println("Attestation Claims: ")
+		logger.Println("Attestation Claims: ")
 		printedClaims, err := json.MarshalIndent(claims, "", "  ")
 		if err != nil {
-			fmt.Printf(err.Error())
+			logger.Printf(err.Error())
 			os.Exit(1)
 		}
-		fmt.Printf("%s\n", string(printedClaims))
+		logger.Printf("%s\n", string(printedClaims))
 	} else {
-		fmt.Printf("error unmarshalling jwt token %v\n", err)
+		logger.Printf("error unmarshalling jwt token %v\n", err)
 		return
 	}
 
 	//  Start listening to pubsub messages
-
-	ctx := context.Background()
-
-	// try to derive the projectID from the default metadata server creds
-	creds, err := google.FindDefaultCredentials(ctx)
-	if err != nil {
-		fmt.Printf("Error finding default credentials %v\n", err)
-		os.Exit(1)
-	}
-
-	if creds.ProjectID == "" {
-		fmt.Printf("error finding default projectID \n")
-		return
-	}
-
-	fmt.Printf("Using projectID for subscription: %s\n", creds.ProjectID)
-
 	client, err := pubsub.NewClient(ctx, creds.ProjectID)
 	if err != nil {
-		fmt.Printf("Error creating pubsub client %v\n", err)
+		logger.Printf("Error creating pubsub client %v\n", err)
 		os.Exit(1)
 	}
 	defer client.Close()
 
-	fmt.Printf("Beginning subscription: %s\n", subscription)
+	logger.Printf("Beginning subscription: %s\n", subscription)
 
 	sub := client.Subscription(subscription)
 
@@ -133,7 +174,7 @@ func main() {
 
 	var received int32
 	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-		fmt.Printf("Got MessageID ID: %s\n", msg.ID)
+		logger.Printf("Got MessageID ID: %s\n", msg.ID)
 		received++
 		key, keyok := msg.Attributes["key"]
 		audience, audienceok := msg.Attributes["audience"]
@@ -142,7 +183,7 @@ func main() {
 			// bootstrap Collaborator credentials;  decrypt with KMS key
 			// note, we're creating a new kmsclient on demand based on what is sent in the message alone.
 			// realistically, the KMS audience and key would be using configuration values and not simply use what is sent in the message
-			fmt.Printf("bootstrapping  KMS key [%s] for collaborator [%s]\n", key, audience)
+			logger.Printf("bootstrapping  KMS key [%s] for collaborator [%s]\n", key, audience)
 			c1_adc := fmt.Sprintf(`{
 		"type": "external_account",
 		"audience": "%s",
@@ -154,35 +195,35 @@ func main() {
 		}`, audience, *attestation_token_path)
 			kmsClient, err := kms.NewKeyManagementClient(ctx, option.WithCredentialsJSON([]byte(c1_adc)))
 			if err != nil {
-				fmt.Printf("Error creating KMS client; skipping message %v\n", err)
+				logger.Printf("Error creating KMS client; skipping message %v\n", err)
 			} else {
 				c1_decrypted, err := kmsClient.Decrypt(ctx, &kmspb.DecryptRequest{
 					Name:       key,
 					Ciphertext: msg.Data,
 				})
 				if err != nil {
-					fmt.Printf("Error decoding ciphertext for collaborator %v\n", err)
+					logger.Printf("Error decoding ciphertext for collaborator %v\n", err)
 				} else {
 					currentUser := string(c1_decrypted.Plaintext)
 					c, ok := users[currentUser]
 					if ok {
 						users[currentUser] = atomic.AddInt32(&c, 1)
-						fmt.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", currentUser, c)
+						logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", currentUser, c)
 					} else {
 						users[currentUser] = 1
-						fmt.Printf(">>>>>>>>>>> User %s not found, adding to list", currentUser)
+						logger.Printf(">>>>>>>>>>> User %s not found, adding to list", currentUser)
 					}
 				}
 			}
 		} else {
-			fmt.Printf("key or audience attribute not sent; skipping message processing\n")
+			logger.Printf("key or audience attribute not sent; skipping message processing\n")
 		}
 		msg.Ack()
 	})
 	if err != nil {
-		fmt.Printf("Error reading pubsub subscription %v\n", err)
+		logger.Printf("Error reading pubsub subscription %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Shutting down server after reading %d messages\n", received)
+	logger.Printf("Shutting down server after reading %d messages\n", received)
 
 }
