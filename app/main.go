@@ -15,8 +15,8 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	kms "cloud.google.com/go/kms/apiv1"
 
-	"google.golang.org/genproto/googleapis/api/monitoredres"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	"google.golang.org/genproto/googleapis/api/monitoredres"
 
 	"cloud.google.com/go/logging"
 	"cloud.google.com/go/pubsub"

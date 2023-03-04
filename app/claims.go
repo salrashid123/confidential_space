@@ -39,7 +39,7 @@ type TEEClaims struct {
 }
 
 type ConfidentialSpaceClaims struct {
-	SupportAttributes string `json:"support_attributes"`
+	SupportAttributes []string `json:"support_attributes"`
 }
 
 type SubmodClaims struct {
