@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 var (
 	config                 = flag.String("config", "config.json", "Arbitrary config file")
 	attestation_token_path = flag.String("attestation_token_path", "/run/container_launcher/attestation_verifier_claims_token", "Path to Attestation Token file")
+	project_id             = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
 	serverShutdownTime     = flag.Int64("server_shutdown_time", 30, "shutdown TEE in mins")
 
 	// map to hold all the users currently found and the number of times
@@ -57,13 +59,17 @@ func main() {
 		logger.Fatalf("Error finding default credentials %v\n", err)
 	}
 
-	if creds.ProjectID == "" {
-		logger.Fatalf("error finding default projectID from credentials\n")
+	// derive the projectID to send logs and pubsub subscribe.  If specified in command line, use that.  Otherwise derive from creds
+	if *project_id == "" {
+		if creds.ProjectID == "" {
+			logger.Fatalf("error: --project_id parameter is null and unable to get projectID from credentials\n")
+		}
+		*project_id = creds.ProjectID
 	}
 
 	// if we're running on GCE Conf-space, use the cloud logging api instead of stdout/stderr
 	if metadata.OnGCE() {
-		logClient, err := logging.NewClient(ctx, creds.ProjectID)
+		logClient, err := logging.NewClient(ctx, *project_id)
 		if err != nil {
 			log.Fatalf("Failed to create client: %v", err)
 		}
@@ -98,16 +104,16 @@ func main() {
 
 	c1_cred, err := os.ReadFile(*config)
 	if err != nil {
-		logger.Println("error reading  config file")
-		os.Exit(1)
+		logger.Printf("error reading  config file %v\n", err)
+		runtime.Goexit()
 	}
 
 	config := map[string]string{}
 
 	err = json.Unmarshal(c1_cred, &config)
 	if err != nil {
-		logger.Println("error parsing config file")
-		os.Exit(1)
+		logger.Printf("error parsing config file %v\n", err)
+		runtime.Goexit()
 	}
 
 	logger.Printf("Config file %v\n", config)
@@ -116,15 +122,15 @@ func main() {
 
 	attestation_encoded, err := os.ReadFile(*attestation_token_path)
 	if err != nil {
-		logger.Println("error reading attestation file")
-		os.Exit(1)
+		logger.Printf("error reading attestation file %v\n", err)
+		runtime.Goexit()
 	}
 
 	//logger.Printf("Raw TOKEN (do not do this in real life!  [%s]\n", string(attestation_encoded))
 	jwtSet, err := jwk.FetchHTTP(jwksURL)
 	if err != nil {
 		logger.Printf("Unable to load JWK Set: %v", err)
-		os.Exit(1)
+		runtime.Goexit()
 	}
 
 	gcpIdentityDoc := &Claims{}
@@ -141,7 +147,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Printf("     Error parsing JWT %v", err)
-		os.Exit(1)
+		runtime.Goexit()
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
@@ -149,7 +155,7 @@ func main() {
 		printedClaims, err := json.MarshalIndent(claims, "", "  ")
 		if err != nil {
 			logger.Printf(err.Error())
-			os.Exit(1)
+			runtime.Goexit()
 		}
 		logger.Printf("%s\n", string(printedClaims))
 	} else {
@@ -158,10 +164,10 @@ func main() {
 	}
 
 	//  Start listening to pubsub messages
-	client, err := pubsub.NewClient(ctx, creds.ProjectID)
+	client, err := pubsub.NewClient(ctx, *project_id)
 	if err != nil {
 		logger.Printf("Error creating pubsub client %v\n", err)
-		os.Exit(1)
+		runtime.Goexit()
 	}
 	defer client.Close()
 
@@ -222,8 +228,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Printf("Error reading pubsub subscription %v\n", err)
-		os.Exit(1)
+		runtime.Goexit()
 	}
 	logger.Printf("Shutting down server after reading %d messages\n", received)
-
 }
