@@ -133,7 +133,9 @@ The technique used in this example uses `bazel` to create reproducible container
 
 You don't _have to_ use bazel to build an image (you can just use the `Dockerfile` provided in this example).  If you don't use bazel, you'll get a different image hash though. 
 
-In this example using bazel, the code will always produce a hash of `myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454`
+In this example using bazel, the code will always produce a hash of 
+
+* `myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454`
 
 For more info, see
 
@@ -276,118 +278,16 @@ The cloud build step should give this specific hash
 
 The cloud build steps also used a kms key to sign the images using [cosign](https://github.com/sigstore/cosign).
 
-If you want to dig a bit more into `cosign`, you can verify the signatures issued by the builders's KMS key.  This is optional so if you want, just skip to the _operator_ section.
+Using `cosign` is a completely optional step used to add verification signatures and claims to the image.  See appendix for more information.
 
-To check the cosign signatures and attestations, install cosign and then:
-
-```bash
-### verify with cosign
-## first login to ADC as the builder
-## gcloud config configurations activate builder
-## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
-## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
-## gcloud auth application-default login
-$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  
-
-📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
-└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.att
-   └── 🍒 sha256:d05cd526eb205e3e85523b2eff94ae63072bfd3a59e7943ee4b49268e57debb7
-└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.sig
-   └── 🍒 sha256:3cca99d9fd9680c176ef85d56ba133b0d5f48fa94a74df7c20c861c338134d6e
-```
-
-which will exist as additional artifacts in the registry
-
-![images/artifacts.png](images/artifacts.png)
-
-```bash
-# get the public key for the cosigned image
-gcloud kms keys versions get-public-key 1  \
-  --key=key1 --keyring=cosignkr \
-  --location=global --output-file=/tmp/kms_pub.pem
-
-## verify 
-# you can also reference the kms key via url instead of using a local one
-#   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
-
-cosign verify --key /tmp/kms_pub.pem   \
-   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
-
-# the output for the verify will look like:
-
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
-The following checks were performed on each of these signatures:
-  - The cosign claims were validated
-  - The signatures were verified against the specified public key
-[
-  {
-    "critical": {
-      "identity": {
-        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage"
-      },
-      "image": {
-        "docker-manifest-digest": "sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
-      },
-      "type": "cosign container image signature"
-    },
-    "optional": {
-      "key1": "value1"
-    }
-  }
-]
-
-
-# now verify the attestation that is cross checked with the rego in `policy.rego`
-#  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
-cosign verify-attestation --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
-
-## this gives
-
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
-The following checks were performed on each of these signatures:
-  - The cosign claims were validated
-  - The signatures were verified against the specified public key
-{
-  "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L21pbmVyYWwtbWludXRpYS04MjAvcmVwbzEvbXlpbWFnZSIsImRpZ2VzdCI6eyJzaGEyNTYiOiIxNGQ3NjZkYjFmYTkxNGNhYjkzNjc4MjQ0YTQ0NWU5NmFmMmIzZDYzY2Q0NTcyZmUwNjJmMjc0NmU0MzA2NDU0In19XSwicHJlZGljYXRlIjp7IkRhdGEiOiJ7IFwicHJvamVjdGlkXCI6IFwibWluZXJhbC1taW51dGlhLTgyMFwiLCBcImJ1aWxkaWRcIjogXCJkM2U0NGI1ZS1lMGE0LTQxNzUtYjU2Ni01YjFjODQ4ODAzNmVcIiwgXCJmb29cIjpcImJhclwiLCBcImNvbW1pdHNoYVwiOiBcImU2NmI1NmVhYjBkOGZiMmZkOWVkMDY5NDI0MjdkMjk5ODk2ODc4NWJcIiB9IiwiVGltZXN0YW1wIjoiMjAyMy0wMy0wNFQxMzowNDoyNVoifX0=",
-  "signatures": [
-    {
-      "keyid": "",
-      "sig": "MEUCIEO8SI8aDnUdZ3JO5gmNZykP3WfjcqYtCgp71VEDeilLAiEAq/BTxtsKCVpuEoVR6vYOyxwAVwhRWCk4jia8Kx1ofGk="
-    }
-  ]
-}
-
-
-## if you decode the payload, you'll see the predicate and image attestations (build number, commit hash, timestamp and the prediecate KV pair we sent during build (foo=bar in consign_verify/policy.rego))
-
-{
-  "_type": "https://in-toto.io/Statement/v0.1",
-  "predicateType": "cosign.sigstore.dev/attestation/v1",
-  "subject": [
-    {
-      "name": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage",
-      "digest": {
-        "sha256": "14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
-      }
-    }
-  ],
-  "predicate": {
-    "Data": "{ 
-      \"projectid\": \"mineral-minutia-820\", 
-      \"buildid\": \"d3e44b5e-e0a4-4175-b566-5b1c8488036e\", 
-      \"foo\":\"bar\", 
-      \"commitsha\": \"e66b56eab0d8fb2fd9ed06942427d2998968785b\"
-    }",
-    "Timestamp": "2023-03-04T13:04:25Z"
-  }
-}
-```
 
 ### Operator
 
-Once the image is built and each collaborator is in agreement that the code contained in image `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 ` isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
+Once the image is built and each collaborator is in agreement that the code contained in image 
+
+- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454` 
+
+isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
 
 The operator in this case simply constructs and manages GCP resources such that a Confidential Space VM within their infra will run this attested container only.
 
@@ -502,7 +402,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
-Important: use `"STABLE" in assertion.submods.confidential_space.support_attributes` for the pool definition for production  if you want to prevent the operator running the debug image family (`--image-family=confidential-space-debug`) **which allows SSH**.
+**Important**: use `"STABLE" in assertion.submods.confidential_space.support_attributes` for the pool definition for production  if you want to prevent the operator running the debug image family (`--image-family=confidential-space-debug`) **which allows SSH**.
 
 At this point, the collaborator will only release access to a KMS key if they see a request originating from a trusted Confidential Space VM the operator runs and at that, from a specific image hash they had earlier trusted and authorized.
 
@@ -1299,9 +1199,122 @@ For use with KMS, each participant would encrypt the binary form of the marshall
 
 #### Check Cosign Signature and Attestation at Runtime
 
-Confidential space does not currently verify if the image being deployed was signed by various parties with any attestations.
+Confidential space does not currently verify if the image being deployed was signed by various parties with any attestations.  
 
-If you really need this now, you _can_ perform the checks for the attestation and signature when the application starts up.
+This is where [cosign](https://github.com/sigstore/cosign) can help add a participant or third party siganatures to the images.
+
+In the example here,  the builder's generated sigature is added in during the cloudbuild steps using the builders's KMS key.  
+
+To check the cosign signatures and attestations, install cosign and then:
+
+```bash
+### verify with cosign
+## first login to ADC as the builder
+## gcloud config configurations activate builder
+## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
+## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
+## gcloud auth application-default login
+$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  
+
+📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
+└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.att
+   └── 🍒 sha256:d05cd526eb205e3e85523b2eff94ae63072bfd3a59e7943ee4b49268e57debb7
+└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.sig
+   └── 🍒 sha256:3cca99d9fd9680c176ef85d56ba133b0d5f48fa94a74df7c20c861c338134d6e
+```
+
+which will exist as additional artifacts in the registry
+
+![images/artifacts.png](images/artifacts.png)
+
+```bash
+# get the public key for the cosigned image
+gcloud kms keys versions get-public-key 1  \
+  --key=key1 --keyring=cosignkr \
+  --location=global --output-file=/tmp/kms_pub.pem
+
+## verify 
+# you can also reference the kms key via url instead of using a local one
+#   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
+
+cosign verify --key /tmp/kms_pub.pem   \
+   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
+
+# the output for the verify will look like:
+
+Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+[
+  {
+    "critical": {
+      "identity": {
+        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage"
+      },
+      "image": {
+        "docker-manifest-digest": "sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
+      },
+      "type": "cosign container image signature"
+    },
+    "optional": {
+      "key1": "value1"
+    }
+  }
+]
+
+
+# now verify the attestation that is cross checked with the rego in `policy.rego`
+#  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
+cosign verify-attestation --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
+      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
+
+## this gives
+
+Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+{
+  "payloadType": "application/vnd.in-toto+json",
+  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L21pbmVyYWwtbWludXRpYS04MjAvcmVwbzEvbXlpbWFnZSIsImRpZ2VzdCI6eyJzaGEyNTYiOiIxNGQ3NjZkYjFmYTkxNGNhYjkzNjc4MjQ0YTQ0NWU5NmFmMmIzZDYzY2Q0NTcyZmUwNjJmMjc0NmU0MzA2NDU0In19XSwicHJlZGljYXRlIjp7IkRhdGEiOiJ7IFwicHJvamVjdGlkXCI6IFwibWluZXJhbC1taW51dGlhLTgyMFwiLCBcImJ1aWxkaWRcIjogXCJkM2U0NGI1ZS1lMGE0LTQxNzUtYjU2Ni01YjFjODQ4ODAzNmVcIiwgXCJmb29cIjpcImJhclwiLCBcImNvbW1pdHNoYVwiOiBcImU2NmI1NmVhYjBkOGZiMmZkOWVkMDY5NDI0MjdkMjk5ODk2ODc4NWJcIiB9IiwiVGltZXN0YW1wIjoiMjAyMy0wMy0wNFQxMzowNDoyNVoifX0=",
+  "signatures": [
+    {
+      "keyid": "",
+      "sig": "MEUCIEO8SI8aDnUdZ3JO5gmNZykP3WfjcqYtCgp71VEDeilLAiEAq/BTxtsKCVpuEoVR6vYOyxwAVwhRWCk4jia8Kx1ofGk="
+    }
+  ]
+}
+
+
+## if you decode the payload, you'll see the predicate and image attestations (build number, commit hash, timestamp and the prediecate KV pair we sent during build (foo=bar in consign_verify/policy.rego))
+
+{
+  "_type": "https://in-toto.io/Statement/v0.1",
+  "predicateType": "cosign.sigstore.dev/attestation/v1",
+  "subject": [
+    {
+      "name": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage",
+      "digest": {
+        "sha256": "14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
+      }
+    }
+  ],
+  "predicate": {
+    "Data": "{ 
+      \"projectid\": \"mineral-minutia-820\", 
+      \"buildid\": \"d3e44b5e-e0a4-4175-b566-5b1c8488036e\", 
+      \"foo\":\"bar\", 
+      \"commitsha\": \"e66b56eab0d8fb2fd9ed06942427d2998968785b\"
+    }",
+    "Timestamp": "2023-03-04T13:04:25Z"
+  }
+}
+```
+
+You can also encode in verificaiton of each participants cosign signatures into the code.
+
+This is similar to [binary authorization](https://cloud.google.com/binary-authorization) except that the verification occurs incode using baked in public keys
 
 In this mode, the secure image you're deploying "checks" the hash value for its own image from `/run/container_launcher/attestation_verifier_claims_token` and then use a static (or configured) set of public or KMS keys to verify signatures or attestations predicates are preset.
 
