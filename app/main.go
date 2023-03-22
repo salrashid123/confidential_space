@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"log"
@@ -179,6 +179,7 @@ func main() {
 	defer cancel()
 
 	var received int32
+	var mu sync.Mutex
 	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
 		logger.Printf("Got MessageID ID: %s\n", msg.ID)
 		received++
@@ -211,14 +212,10 @@ func main() {
 					logger.Printf("Error decoding ciphertext for collaborator %v\n", err)
 				} else {
 					currentUser := string(c1_decrypted.Plaintext)
-					c, ok := users[currentUser]
-					if ok {
-						users[currentUser] = atomic.AddInt32(&c, 1)
-						logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", currentUser, c)
-					} else {
-						users[currentUser] = 1
-						logger.Printf(">>>>>>>>>>> User %s not found, adding to list", currentUser)
-					}
+					mu.Lock()
+					users[currentUser] = users[currentUser] + 1
+					logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", currentUser, users[currentUser])
+					mu.Unlock()
 				}
 			}
 		} else {

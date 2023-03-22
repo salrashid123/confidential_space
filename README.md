@@ -56,7 +56,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Logging](#logging)  
   - [Bazel build overrides](#bazel-build-overrides)   
   - [VPC-SC](#vpc-sc)
-  - [mtls using KMS Keys](#mtls-using-kms-keys)
+  - [mTLS using acquired Keys](#mtls-using-acquired-keys)
   - [Attestation Token and JWT Bearer token](#attestation-token-and-jwt-bearer-token)
   - [Authenticating with other Cloud Providers](#authenticating-with-other-cloud-providers)
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
@@ -135,7 +135,7 @@ You don't _have to_ use bazel to build an image (you can just use the `Dockerfil
 
 In this example using bazel, the code will always produce a hash of 
 
-* `myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454`
+* `tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151`
 
 For more info, see
 
@@ -143,7 +143,6 @@ For more info, see
 - [Deterministic container hashes and container signing using Cosign, Bazel and Google Cloud Build](https://github.com/salrashid123/cosign_bazel_cloud_build)
 - [Deterministic builds with go + bazel + grpc + docker](https://github.com/salrashid123/go-grpc-bazel-docker)
 - [Deterministic builds with nodejs + bazel + docker](https://github.com/salrashid123/nodejs-bazel-docker)
-- [Deterministic container images with c++ and GCP APIs using bazel.](https://github.com/salrashid123/cpp-bazel-docker)
 - [Understanding workload identity federation](https://blog.salrashid.dev/articles/2021/understanding_workload_identity_federation/)
 
 Anyway, to setup,
@@ -176,15 +175,6 @@ gcloud artifacts repositories add-iam-policy-binding repo1 \
     --member=serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com \
     --role=roles/artifactregistry.writer
 
-# Allow the operator access to the image registry 
-# this is necessary since the operator project will pull an image
-## note, you should set the $OPERATOR_PROJECT_ID env-var first
-echo $OPERATOR_PROJECT_ID
-gcloud artifacts repositories add-iam-policy-binding repo1 \
-    --location=us-central1  \
-    --member=serviceAccount:operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
-    --role=roles/artifactregistry.reader
-
 # allow cloud build to access the public KMS keys used for signing (used for cosign)
 gcloud projects add-iam-policy-binding $BUILDER_PROJECT_ID \
   --member=serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com  \
@@ -205,15 +195,22 @@ gcloud kms keys add-iam-policy-binding key1 \
     --member=serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com \
     --role=roles/cloudkms.signer
 
-# allow current gcloud user to view the public key, in this step, you can also allow each collaborator viewer access
+# allow current gcloud and cloud build to view the public key, in this step, you can also allow each collaborator viewer access
 gcloud kms keys add-iam-policy-binding key1 \
     --keyring=cosignkr --location=global \
     --member=user:$GCLOUD_USER  \
     --role=roles/cloudkms.publicKeyViewer
 
+gcloud kms keys add-iam-policy-binding key1 \
+    --keyring=cosignkr --location=global \
+    --member=serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com \
+    --role=roles/cloudkms.publicKeyViewer  
+
 # create a temp bucket for cloud build and allow cloud build permissions to use it
 gsutil mb gs://$BUILDER_PROJECT_ID\_cloudbuild
-gsutil iam ch serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com:objectAdmin gs://$BUILDER_PROJECT_ID\_cloudbuild
+gsutil iam ch \
+  serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com:objectAdmin \
+  gs://$BUILDER_PROJECT_ID\_cloudbuild
 
 # create a cloud source repo to hold the source code
 gcloud source repos create app-repo
@@ -237,21 +234,24 @@ git push
 gcloud beta builds triggers create manual --region=global \
    --name=app-build-trigger --build-config=cloudbuild.yaml \
    --repo=https://source.developers.google.com/p/$BUILDER_PROJECT_ID/r/app-repo \
-   --repo-type=CLOUD_SOURCE_REPOSITORIES --branch=main \
+   --repo-type=CLOUD_SOURCE_REPOSITORIES --branch=master \
    --service-account=projects/$BUILDER_PROJECT_ID/serviceAccounts/cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com 
 
 # generate the cloud build
-gcloud alpha builds triggers run app-build-trigger
+gcloud builds triggers run app-build-trigger --region=global --branch=master
 
-# optionally stream the build logs
-gcloud alpha builds list
+# or direct
+# gcloud builds submit .
+
+# then optionally stream the build logs
+gcloud builds list
 
 ## note, if you want to modify the code, use bazel to regenerate the dependencies
 # to acquire bazel go dependency references
 # bazel run :gazelle -- update-repos -from_file=go.mod -prune=true -to_macro=repositories.bzl%go_repositories
 
 # to build image locally with bazel
-#    repository = "us-central1-docker.pkg.dev/builder-project/repo1/myimage"
+#    repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee"
 # bazel build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
 # bazel run --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
 
@@ -263,19 +263,26 @@ gcloud alpha builds list
 #     --output_user_root=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
 
 ### then tag and push...Note: the artifacts here will not include items generated through cosign...its just the image alone
-# docker tag us-central1-docker.pkg.dev/builder-project/repo1/myimage:server us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage:server
-# docker push us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage:server
+# docker tag us-central1-docker.pkg.dev/builder-project/repo1/tee:server us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
+# docker push us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
 
 
 # pull the image.  you should see the exact same image hash
-docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage:server
-docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage:server | jq -r '.[].RepoDigests[]'
-docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
+docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
+docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server | jq -r '.[].RepoDigests[]'
+docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
+
+docker pull docker.io/salrashid123/tee:server
+docker inspect docker.io/salrashid123/tee:server
 ```
 
-The cloud build step should give this specific hash
+The cloud build step should give this specific container hash
 
 ![images/build_hash.png](images/build_hash.png)
+
+if needed the builder can demonstrate deriving from a specific git commit hash was associated with the build.
+
+![images/commit_hash.png](images/commit_hash.png)
 
 The cloud build steps also used a kms key to sign the images using [cosign](https://github.com/sigstore/cosign).
 
@@ -286,7 +293,7 @@ Using `cosign` is a completely optional step used to add verification signatures
 
 Once the image is built and each collaborator is in agreement that the code contained in image 
 
-- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454` 
+- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151` 
 
 isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
 
@@ -308,6 +315,10 @@ Anyway, to get started
 gcloud config configurations activate operator
 export OPERATOR_PROJECT_ID=`gcloud config get-value core/project`
 export OPERATOR_PROJECT_NUMBER=`gcloud projects describe $OPERATOR_PROJECT_ID --format='value(projectNumber)'`
+
+# enable some services and create the artifact registry that will hold the image and cosign signature
+gcloud services enable \
+    compute.googleapis.com confidentialcomputing.googleapis.com pubsub.googleapis.com
 
 # create a service account the confidential space VM's will run as
 gcloud iam service-accounts create operator-svc-account
@@ -372,7 +383,7 @@ export COLLABORATOR_1_GCLOUD_USER=`gcloud config get-value core/account`
 gcloud services enable \
     pubsub.googleapis.com \
     cloudkms.googleapis.com \
-    iam.googleapis.com
+    iam.googleapis.com pubsub.googleapis.com
 
 # create a pool
 gcloud iam workload-identity-pools create trusted-workload-pool --location="global"
@@ -399,7 +410,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
 ## we've already performed corse grain authorization on the workload pool and this step
 ## applies fine grain control to a specific image to decrypt data
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"  \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"  \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -412,7 +423,7 @@ In other words, the use of the KMS key is now bound to the operator's project wh
 Access is granted to an identity bound to the image:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
+principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
 ```
 
 We could have configured the entire workload provider to mandate that any access to any resource must include that specific image has.  This demo, however, abstracts it to the resource (KMS key) binding.  This was done to allow more operational flexibility: if the image builder creates a new image hash, each collaborator can more easily replace the IAM binding on specific resources instead of redefining the entire providers constraints.
@@ -435,7 +446,7 @@ export COLLABORATOR_2_PROJECT_NUMBER=`gcloud projects describe $COLLABORATOR_2_P
 gcloud services enable \
     pubsub.googleapis.com \
     cloudkms.googleapis.com \
-    iam.googleapis.com
+    iam.googleapis.com pubsub.googleapis.com
 
 gcloud iam workload-identity-pools create trusted-workload-pool --location="global"
 
@@ -444,7 +455,7 @@ gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
     --location="global"     --workload-identity-pool="trusted-workload-pool"   \
       --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
           --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
-             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts"
+             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts"
 
 gcloud kms keyrings create kr1 --location=global --project $COLLABORATOR_2_PROJECT_ID
 gcloud kms keys create --keyring=kr1 --location=global --purpose=encryption  key1
@@ -454,7 +465,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
      --member="user:$COLLABORATOR_2_GCLOUD_USER"   --role=roles/cloudkms.cryptoKeyEncrypter
 
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_2_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454" \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151" \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -505,7 +516,7 @@ gcloud compute instances create vm1 --confidential-compute \
   --image-project=confidential-space-images \
   --image-family=confidential-space --network=teenetwork --no-address \
   --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
-  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454~tee-restart-policy=Never~tee-container-log-redirect=true
+  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151~tee-restart-policy=Never~tee-container-log-redirect=true
 
 ## for ssh access, set --image-family=confidential-space-debug and omit the `"STABLE" in assertion.submods.confidential_space.support_attributes`  in each collaborator pool/provider definition
 # gcloud compute firewall-rules create allow-ingress-from-iap --network teenetwork --direction=INGRESS --action=allow --rules=tcp:22 --source-ranges=35.235.240.0/20
@@ -553,7 +564,11 @@ go run main.go \
   --audience="//iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier"
 ```
 
-what you'll see is a simple counter in the operator VM logs indicating both decrypted values match.  
+If you happened to see the pubsub messages, you'll see the message data is encrypted:
+
+![images/pubsub_message.png](images/pubsub_message.png)
+
+The TEE should automatically process each message so what you'll see is a simple counter in the operator VM logs indicating the counter.  
 
 Since both collaborators sent in `alice`, you'll see the count to 2
 
@@ -562,6 +577,7 @@ Since both collaborators sent in `alice`, you'll see the count to 2
 ---
 
 ### Appendix
+
 #### Audit Logging
 
 You can enable audit logs for the collaborators, operators or builders
@@ -608,7 +624,7 @@ Describes a go struct denoting the [startup metadata](https://cloud.google.com/c
 	RestartPolicy              RestartPolicy
 	Cmd                        []string
 	Envs                       []EnvVar
-	_unused                    string
+	AttestationServiceAddr     string
 	ImpersonateServiceAccounts []string
 	ProjectID                  string
 	Region                     string
@@ -714,28 +730,32 @@ title: collaborator_1_perimeter
 Note, VPC-SC "ingressPolicy->ingressFrom->identity" does not support `principal://` or `principalSet://` get so we have to enable `ANY_IDENTITY`.  Ideally, we could tune the identity to:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
+principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
 ```
 
 If the TEE attempts to access the STS or KMS endpoint for any collaborator who _has not_ authorized the project for ingress, they would see a VPC-SC error at the level where the API is invoked.  In the following, the even the token grant fails
 
 ![images/vpc-sc.png](images/vpc-sc.png)
 
-#### mTLS using KMS keys
+#### mTLS using acquired Keys
 
-You can also establish an mTLS connection where the private key resides in your KMS system.
+The object that is decrypted within a TEE can easily be a keypair used to establish or receive an mTLS connection.  
+
+In this mode, a trusted party may choose to send an mTLS keypair to the TEE which it then uses to make a new outbound connection to a service which expects that that client certificate.
+
+Altarnatively, the mtls connection can be used to in a 'multi-party' capability which different collaborators each holds their keysiare which is used together to create the TLS connection.  This idea is explored in the following repo:
+
+-[Multiparty Consent Based Networks (MCBN)](https://github.com/salrashid123/mcbn)
+
+Finally, you can also establish an mTLS connection where the private key resides in your KMS system.
 
 In this mode, you will issue a new KMS key and grant the Confidential Space VM access to that kMS key.
-
-You can then use that access to make an outbound HTTPS call using mTLS to your server.
-
-If you want to do this, recommend creating a new KMS key specifically for mTLS (not for accessing other GCP resources like pubsub, etc)
 
 For more information, see 
 
 - [mTLS with Google Cloud KMS](https://blog.salrashid.dev/articles/2022/kms_mtls/)
 
-You certainly don't have to use KMS just for mTLS here: the secret that is sent by each collaborator can be the encrypted public cert and private key you use for mTLS anyway. 
+Much more commonly, a TEE will just unwrap an x509 or keypair directly within the TEE and use that as described earlier.
 
 #### Attestation Token and JWT Bearer token
 
@@ -784,8 +804,8 @@ Instead, you can generate a JWT token using another KMS key you have access to t
   ],
   "submods": {
     "container": {
-      "image_reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454",
-      "image_digest": "sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454",
+      "image_reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151",
+      "image_digest": "sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151",
       "restart_policy": "Never",
       "image_id": "sha256:d8eaafe71cfde47a1e00df388e031fddd15bc4e59b40960af04e677b27a25174",
       "env_override": null,
@@ -1153,7 +1173,7 @@ vault write auth/jwt/role/my-jwt-role -<<EOF
     "hwmodel": "GCP_AMD_SEV",
     "swname": "CONFIDENTIAL_SPACE",
     "swversion": "1",
-    "/submods/container/image_digest": ["sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"],
+    "/submods/container/image_digest": ["sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"],
     "/submods/gce/project_id": ["$OPERATOR_PROJECT_ID"],
     "google_service_accounts":["operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com"]
   }  
@@ -1215,13 +1235,13 @@ To check the cosign signatures and attestations, install cosign and then:
 ## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
 ## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
 ## gcloud auth application-default login
-$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  
+$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  
 
-📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454
-└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.att
-   └── 🍒 sha256:d05cd526eb205e3e85523b2eff94ae63072bfd3a59e7943ee4b49268e57debb7
-└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage:sha256-14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454.sig
-   └── 🍒 sha256:3cca99d9fd9680c176ef85d56ba133b0d5f48fa94a74df7c20c861c338134d6e
+📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
+└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/builder-380817/repo1/tee:sha256-c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151.sig
+   └── 🍒 sha256:0c757b93c4718b9fafbfe9d9b6d16f15f5d920f7eb3cda173b8a517816f592ea
+└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/builder-380817/repo1/tee:sha256-c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151.att
+   └── 🍒 sha256:df1f113204075d86be5907c283ef5ceae4277d3f92a26eb21478a2125cac259b
 ```
 
 which will exist as additional artifacts in the registry
@@ -1239,11 +1259,11 @@ gcloud kms keys versions get-public-key 1  \
 #   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
 
 cosign verify --key /tmp/kms_pub.pem   \
-   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
+   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  | jq '.'
 
 # the output for the verify will look like:
 
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
+Verification for us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -1251,10 +1271,10 @@ The following checks were performed on each of these signatures:
   {
     "critical": {
       "identity": {
-        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage"
+        "docker-reference": "us-central1-docker.pkg.dev/builder-380817/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
+        "docker-manifest-digest": "sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"
       },
       "type": "cosign container image signature"
     },
@@ -1268,21 +1288,21 @@ The following checks were performed on each of these signatures:
 # now verify the attestation that is cross checked with the rego in `policy.rego`
 #  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
 cosign verify-attestation --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454  | jq '.'
+      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  | jq '.'
 
 ## this gives
 
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage@sha256:14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454 --
+Verification for us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
 {
   "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L21pbmVyYWwtbWludXRpYS04MjAvcmVwbzEvbXlpbWFnZSIsImRpZ2VzdCI6eyJzaGEyNTYiOiIxNGQ3NjZkYjFmYTkxNGNhYjkzNjc4MjQ0YTQ0NWU5NmFmMmIzZDYzY2Q0NTcyZmUwNjJmMjc0NmU0MzA2NDU0In19XSwicHJlZGljYXRlIjp7IkRhdGEiOiJ7IFwicHJvamVjdGlkXCI6IFwibWluZXJhbC1taW51dGlhLTgyMFwiLCBcImJ1aWxkaWRcIjogXCJkM2U0NGI1ZS1lMGE0LTQxNzUtYjU2Ni01YjFjODQ4ODAzNmVcIiwgXCJmb29cIjpcImJhclwiLCBcImNvbW1pdHNoYVwiOiBcImU2NmI1NmVhYjBkOGZiMmZkOWVkMDY5NDI0MjdkMjk5ODk2ODc4NWJcIiB9IiwiVGltZXN0YW1wIjoiMjAyMy0wMy0wNFQxMzowNDoyNVoifX0=",
+  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L2J1aWxkZXItMzgwODE3L3JlcG8xL3RlZSIsImRpZ2VzdCI6eyJzaGEyNTYiOiJjOGU2ODkyMGMxZDQ0YzM1YTJkZTAzMTc4OWZmZGM1MjE4OGFhOGM1ODBmNGQ3Y2IyZWFjODQxYzhjYWFmMTUxIn19XSwicHJlZGljYXRlIjp7IkRhdGEiOiJ7IFwicHJvamVjdGlkXCI6IFwiYnVpbGRlci0zODA4MTdcIiwgXCJidWlsZGlkXCI6IFwiNTkzY2Y1ZjItMzU4OC00ZmQyLTk3MmItM2IyYmFmNDE0NTMwXCIsIFwiZm9vXCI6XCJiYXJcIiwgXCJjb21taXRzaGFcIjogXCJkZmFlZTJiY2ZiMWNhMTNhYWU3ZDYzMTY2NjdhZDczNTI4ZjIxMjA0XCIgfSIsIlRpbWVzdGFtcCI6IjIwMjMtMDMtMTZUMTc6Mzk6NTBaIn19",
   "signatures": [
     {
       "keyid": "",
-      "sig": "MEUCIEO8SI8aDnUdZ3JO5gmNZykP3WfjcqYtCgp71VEDeilLAiEAq/BTxtsKCVpuEoVR6vYOyxwAVwhRWCk4jia8Kx1ofGk="
+      "sig": "MEQCIGBCqQZu6rmpKFOE2xFfbML4+lRD6Rjpqz9iZFkqCRulAiA0Gh1DILQJVrFRFYR4Mb/9chzumKDSo/BG++4n1H+0aA=="
     }
   ]
 }
@@ -1295,20 +1315,20 @@ The following checks were performed on each of these signatures:
   "predicateType": "cosign.sigstore.dev/attestation/v1",
   "subject": [
     {
-      "name": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/myimage",
+      "name": "us-central1-docker.pkg.dev/builder-380817/repo1/tee",
       "digest": {
-        "sha256": "14d766db1fa914cab93678244a445e96af2b3d63cd4572fe062f2746e4306454"
+        "sha256": "c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"
       }
     }
   ],
   "predicate": {
     "Data": "{ 
-      \"projectid\": \"mineral-minutia-820\", 
-      \"buildid\": \"d3e44b5e-e0a4-4175-b566-5b1c8488036e\", 
+      \"projectid\": \"builder-380817\", 
+      \"buildid\": \"593cf5f2-3588-4fd2-972b-3b2baf414530\", 
       \"foo\":\"bar\", 
-      \"commitsha\": \"e66b56eab0d8fb2fd9ed06942427d2998968785b\"
+      \"commitsha\": \"dfaee2bcfb1ca13aae7d6316667ad73528f21204\" 
     }",
-    "Timestamp": "2023-03-04T13:04:25Z"
+    "Timestamp": "2023-03-16T17:39:50Z"
   }
 }
 ```

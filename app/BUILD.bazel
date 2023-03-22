@@ -30,7 +30,7 @@ container_image(
         ":config.json", 
     ],
     ports = ["8081"],
-    repository = "us-central1-docker.pkg.dev/builder-project/repo1/myimage",
+    repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee",
 )
 
 go_library(

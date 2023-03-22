@@ -6,12 +6,12 @@ steps:
 
   - name: gcr.io/cloud-builders/docker
     id: tag
-    args: ['tag', 'us-central1-docker.pkg.dev/builder-project/repo1/myimage:server', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server']
+    args: ['tag', 'us-central1-docker.pkg.dev/builder-project/repo1/tee:server', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server']
     waitFor: ['build']
 
   - name: 'gcr.io/cloud-builders/docker'
     id: push
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server']
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server']
     waitFor: ['tag']
 
   - id: attestations
@@ -30,7 +30,7 @@ steps:
     - --annotations=key1=value1
     - --key
     - gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1
-    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
     waitFor: ['push']
 
   - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
@@ -41,7 +41,7 @@ steps:
     - gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1
     - --predicate=/workspace/predicates.json
     - -y
-    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/myimage:server
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
     waitFor: ['push','sign_kms']
 
 
