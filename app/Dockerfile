@@ -17,6 +17,10 @@ LABEL "tee.launch_policy.log_redirect"="always"
 COPY --from=build /go/bin/server /
 COPY --from=build /go/src/app/config.json /config.json
 
+COPY --from=build /go/src/app/tls-ca-chain.pem /tls-ca-chain.pem
+COPY --from=build /go/src/app/tee.crt /tee.crt
+COPY --from=build /go/src/app/ctee.key /tee.key
+
 EXPOSE 8081
 
 ENTRYPOINT ["/server"]

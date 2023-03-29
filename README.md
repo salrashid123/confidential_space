@@ -59,6 +59,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [mTLS using acquired Keys](#mtls-using-acquired-keys)
   - [Attestation Token and JWT Bearer token](#attestation-token-and-jwt-bearer-token)
   - [Authenticating with other Cloud Providers](#authenticating-with-other-cloud-providers)
+  - [Inbound Traffic](#inbound-draffic)
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
   - [Running locally](#running-locally)
   - [Client-Side Encryption](#client-side-encryption)
@@ -135,7 +136,7 @@ You don't _have to_ use bazel to build an image (you can just use the `Dockerfil
 
 In this example using bazel, the code will always produce a hash of 
 
-* `tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151`
+* `tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4`
 
 For more info, see
 
@@ -143,6 +144,8 @@ For more info, see
 - [Deterministic container hashes and container signing using Cosign, Bazel and Google Cloud Build](https://github.com/salrashid123/cosign_bazel_cloud_build)
 - [Deterministic builds with go + bazel + grpc + docker](https://github.com/salrashid123/go-grpc-bazel-docker)
 - [Deterministic builds with nodejs + bazel + docker](https://github.com/salrashid123/nodejs-bazel-docker)
+- [Deterministic container images with c++ and GCP APIs using bazel.](https://github.com/salrashid123/cpp-bazel-docker)
+- [Deterministic container images with python and GCP APIs using bazel](https://github.com/salrashid123/python-bazel-docker)
 - [Understanding workload identity federation](https://blog.salrashid.dev/articles/2021/understanding_workload_identity_federation/)
 
 Anyway, to setup,
@@ -234,14 +237,14 @@ git push
 gcloud beta builds triggers create manual --region=global \
    --name=app-build-trigger --build-config=cloudbuild.yaml \
    --repo=https://source.developers.google.com/p/$BUILDER_PROJECT_ID/r/app-repo \
-   --repo-type=CLOUD_SOURCE_REPOSITORIES --branch=master \
+   --repo-type=CLOUD_SOURCE_REPOSITORIES --branch=main \
    --service-account=projects/$BUILDER_PROJECT_ID/serviceAccounts/cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com 
 
 # generate the cloud build
-gcloud builds triggers run app-build-trigger --region=global --branch=master
+gcloud beta builds triggers run app-build-trigger --region=global --branch=main
 
 # or direct
-# gcloud builds submit .
+# gcloud beta builds submit .
 
 # then optionally stream the build logs
 gcloud builds list
@@ -270,7 +273,7 @@ gcloud builds list
 # pull the image.  you should see the exact same image hash
 docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
 docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server | jq -r '.[].RepoDigests[]'
-docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
+docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4
 
 docker pull docker.io/salrashid123/tee:server
 docker inspect docker.io/salrashid123/tee:server
@@ -293,7 +296,7 @@ Using `cosign` is a completely optional step used to add verification signatures
 
 Once the image is built and each collaborator is in agreement that the code contained in image 
 
-- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151` 
+- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4` 
 
 isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
 
@@ -410,7 +413,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
 ## we've already performed corse grain authorization on the workload pool and this step
 ## applies fine grain control to a specific image to decrypt data
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"  \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4"  \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -423,7 +426,7 @@ In other words, the use of the KMS key is now bound to the operator's project wh
 Access is granted to an identity bound to the image:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
+principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4
 ```
 
 We could have configured the entire workload provider to mandate that any access to any resource must include that specific image has.  This demo, however, abstracts it to the resource (KMS key) binding.  This was done to allow more operational flexibility: if the image builder creates a new image hash, each collaborator can more easily replace the IAM binding on specific resources instead of redefining the entire providers constraints.
@@ -465,7 +468,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
      --member="user:$COLLABORATOR_2_GCLOUD_USER"   --role=roles/cloudkms.cryptoKeyEncrypter
 
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_2_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151" \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4" \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -511,12 +514,25 @@ gcloud projects add-iam-policy-binding $OPERATOR_PROJECT_ID \
 # we are using the image-family=confidential-space here which does **NOT** allow SSH...we've also specified that this vm has no external address
 ### https://cloud.google.com/compute/confidential-vm/docs/reference/cs-options
 gcloud compute instances create vm1 --confidential-compute \
-  --shielded-secure-boot \
+  --shielded-secure-boot --tags=tee-vm \
   --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
   --image-project=confidential-space-images \
   --image-family=confidential-space --network=teenetwork --no-address \
   --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
-  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151~tee-restart-policy=Never~tee-container-log-redirect=true
+  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4~tee-restart-policy=Never~tee-container-log-redirect=true
+
+
+## with external IP
+# gcloud compute firewall-rules create allow-tee-inbound \
+#  --network teenetwork --action allow --direction INGRESS    --source-ranges 0.0.0.0/0     --target-tags tee-vm    --rules tcp:8081
+# gcloud compute instances create vm1 --confidential-compute \
+#  --shielded-secure-boot --tags=tee-vm \
+#  --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
+#  --image-project=confidential-space-images \
+#  --image-family=confidential-space --network=teenetwork \
+#  --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
+#  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4~tee-restart-policy=Never~tee-container-log-redirect=true
+
 
 ## for ssh access, set --image-family=confidential-space-debug and omit the `"STABLE" in assertion.submods.confidential_space.support_attributes`  in each collaborator pool/provider definition
 # gcloud compute firewall-rules create allow-ingress-from-iap --network teenetwork --direction=INGRESS --action=allow --rules=tcp:22 --source-ranges=35.235.240.0/20
@@ -730,7 +746,7 @@ title: collaborator_1_perimeter
 Note, VPC-SC "ingressPolicy->ingressFrom->identity" does not support `principal://` or `principalSet://` get so we have to enable `ANY_IDENTITY`.  Ideally, we could tune the identity to:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
+principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4
 ```
 
 If the TEE attempts to access the STS or KMS endpoint for any collaborator who _has not_ authorized the project for ingress, they would see a VPC-SC error at the level where the API is invoked.  In the following, the even the token grant fails
@@ -770,70 +786,54 @@ Instead, you can generate a JWT token using another KMS key you have access to t
 ```json
 {
   "aud": "https://sts.googleapis.com",
-  "exp": 1677939073,
-  "iat": 1677935473,
-  "iss": "https://confidentialcomputing.googleapis.com",
-  "nbf": 1677935473,
-  "sub": "https://www.googleapis.com/compute/v1/projects/vegas-codelab-5/zones/us-central1-a/instances/vm1",
-  "tee": {
-    "version": {
-      "major": 0,
-      "minor": 0
-    },
-    "platform": {},
-    "container": {
-      "image_reference": "",
-      "image_digest": "",
-      "restart_policy": "",
-      "image_id": "",
-      "env_override": null,
-      "cmd_override": null,
-      "env": null,
-      "args": null
-    },
-    "gce": {}
-  },
-  "secboot": true,
-  "oemid": 11129,
-  "hwmodel": "GCP_AMD_SEV",
-  "swname": "CONFIDENTIAL_SPACE",
-  "swversion": "1",
   "dbgstat": "disabled-since-boot",
+  "exp": 1680110224,
   "google_service_accounts": [
     "operator-svc-account@vegas-codelab-5.iam.gserviceaccount.com"
   ],
+  "hwmodel": "GCP_AMD_SEV",
+  "iat": 1680106624,
+  "iss": "https://confidentialcomputing.googleapis.com",
+  "nbf": 1680106624,
+  "oemid": 11129,
+  "secboot": true,
+  "sub": "https://www.googleapis.com/compute/v1/projects/vegas-codelab-5/zones/us-central1-a/instances/vm1",
   "submods": {
-    "container": {
-      "image_reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151",
-      "image_digest": "sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151",
-      "restart_policy": "Never",
-      "image_id": "sha256:d8eaafe71cfde47a1e00df388e031fddd15bc4e59b40960af04e677b27a25174",
-      "env_override": null,
-      "cmd_override": null,
-      "env": {
-        "HOSTNAME": "vm1",
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
-      },
-      "args": [
-        "/server"
-      ]
-    },
-    "gce": {
-      "zone": "us-central1-a",
-      "project_id": "vegas-codelab-5",
-      "project_number": "75457521745",
-      "instance_name": "vm1",
-      "instance_id": "2444455535566584851"
-    },
     "confidential_space": {
       "support_attributes": [
         "LATEST",
         "STABLE",
         "USABLE"
       ]
+    },
+    "container": {
+      "args": [
+        "/server"
+      ],
+      "cmd_override": null,
+      "env": {
+        "HOSTNAME": "vm1",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
+      },
+      "env_override": null,
+      "image_digest": "sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4",
+      "image_id": "sha256:a0d31166548a5f2e8d165ef7eafd677f3d2dcc622c95b527daf877059df559db",
+      "image_reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4",
+      "restart_policy": "Never"
+    },
+    "gce": {
+      "instance_id": "7788593864923273956",
+      "instance_name": "vm1",
+      "project_id": "vegas-codelab-5",
+      "project_number": "75457521745",
+      "zone": "us-central1-a"
     }
-  }
+  },
+  "swname": "CONFIDENTIAL_SPACE",
+  "swversion": [
+    "1"
+  ]
 }
 ```
 
@@ -859,6 +859,12 @@ You maybe tempted to setup GCP Workload Federation with other cloud providers fr
 * [Federate Google Cloud OIDC tokens for AWS Access Tokens](https://blog.salrashid.dev/articles/2022/awscompat/)
 
 However, you can't use the TEE attestation oidc token (for the reason described earlier)...nor can you use the VM's [instance identity document](https://cloud.google.com/compute/docs/instances/verifying-instance-identity) since any VM (Confidential Space or otherwise) in operator's project would surface that same google OIDC token specifications.
+
+#### Inbound Traffic
+
+At the time of writing (3/29/23), Confidential Space does *not* allow inbound traffic to the container (it can only establish outbound sockets like subscribing to a pubsubtopic).  
+
+This will change in the future so the code in this repo contains an unused snippet demonstrating mTLS listening socket.
 
 #### Outbound traffic via NAT
 
@@ -1172,8 +1178,8 @@ vault write auth/jwt/role/my-jwt-role -<<EOF
   "bound_claims": {
     "hwmodel": "GCP_AMD_SEV",
     "swname": "CONFIDENTIAL_SPACE",
-    "swversion": "1",
-    "/submods/container/image_digest": ["sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"],
+    "swversion": ["1"],
+    "/submods/container/image_digest": ["sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4"],
     "/submods/gce/project_id": ["$OPERATOR_PROJECT_ID"],
     "google_service_accounts":["operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com"]
   }  
@@ -1235,13 +1241,13 @@ To check the cosign signatures and attestations, install cosign and then:
 ## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
 ## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
 ## gcloud auth application-default login
-$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  
+$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4  
 
-📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151
-└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/builder-380817/repo1/tee:sha256-c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151.sig
-   └── 🍒 sha256:0c757b93c4718b9fafbfe9d9b6d16f15f5d920f7eb3cda173b8a517816f592ea
-└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/builder-380817/repo1/tee:sha256-c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151.att
-   └── 🍒 sha256:df1f113204075d86be5907c283ef5ceae4277d3f92a26eb21478a2125cac259b
+📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4
+└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4.att
+   └── 🍒 sha256:88202c88d825896cff6e56a29734c6619ad58c359353be6f1225e6c4842d50a4
+└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4.sig
+   └── 🍒 sha256:37684f26c2e6d754e9bbce1e77748c3a5408c77a77298417f593c0a2a1148f1b
 ```
 
 which will exist as additional artifacts in the registry
@@ -1259,11 +1265,11 @@ gcloud kms keys versions get-public-key 1  \
 #   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
 
 cosign verify --key /tmp/kms_pub.pem   \
-   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  | jq '.'
+   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4  | jq '.'
 
 # the output for the verify will look like:
 
-Verification for us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151 --
+Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -1271,10 +1277,10 @@ The following checks were performed on each of these signatures:
   {
     "critical": {
       "identity": {
-        "docker-reference": "us-central1-docker.pkg.dev/builder-380817/repo1/tee"
+        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"
+        "docker-manifest-digest": "sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4"
       },
       "type": "cosign container image signature"
     },
@@ -1285,27 +1291,31 @@ The following checks were performed on each of these signatures:
 ]
 
 
+
 # now verify the attestation that is cross checked with the rego in `policy.rego`
 #  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
 cosign verify-attestation --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151  | jq '.'
+      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4  | jq '.'
 
 ## this gives
 
-Verification for us-central1-docker.pkg.dev/builder-380817/repo1/tee@sha256:c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151 --
+will be validating against Rego policies: [cosign_verify/policy.rego]
+
+Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
 {
   "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L2J1aWxkZXItMzgwODE3L3JlcG8xL3RlZSIsImRpZ2VzdCI6eyJzaGEyNTYiOiJjOGU2ODkyMGMxZDQ0YzM1YTJkZTAzMTc4OWZmZGM1MjE4OGFhOGM1ODBmNGQ3Y2IyZWFjODQxYzhjYWFmMTUxIn19XSwicHJlZGljYXRlIjp7IkRhdGEiOiJ7IFwicHJvamVjdGlkXCI6IFwiYnVpbGRlci0zODA4MTdcIiwgXCJidWlsZGlkXCI6IFwiNTkzY2Y1ZjItMzU4OC00ZmQyLTk3MmItM2IyYmFmNDE0NTMwXCIsIFwiZm9vXCI6XCJiYXJcIiwgXCJjb21taXRzaGFcIjogXCJkZmFlZTJiY2ZiMWNhMTNhYWU3ZDYzMTY2NjdhZDczNTI4ZjIxMjA0XCIgfSIsIlRpbWVzdGFtcCI6IjIwMjMtMDMtMTZUMTc6Mzk6NTBaIn19",
+  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L21pbmVyYWwtbWludXRpYS04MjAvcmVwbzEvdGVlIiwiZGlnZXN0Ijp7InNoYTI1NiI6ImFlNTA1NGQ1YTI1ZmY0MGVlYzI1NzZiZTQ1MDc2NGEzMjM3NjJhODRlYzc4NjYyYzEwMGI3OTcyYmNkNDMzYjQifX1dLCJwcmVkaWNhdGUiOnsiRGF0YSI6InsgXCJwcm9qZWN0aWRcIjogXCJtaW5lcmFsLW1pbnV0aWEtODIwXCIsIFwiYnVpbGRpZFwiOiBcIjM0M2RiZGZkLThiNDYtNDVjNi1hNTRhLWUxMWRiZDY0ODNhZlwiLCBcImZvb1wiOlwiYmFyXCIsIFwiY29tbWl0c2hhXCI6IFwiZTFlMjE2NjljYTg4MjdlOTM1NmQyOTk5M2VlNWQ2MDY4ZDVlYWE3MVwiIH0iLCJUaW1lc3RhbXAiOiIyMDIzLTAzLTI5VDE2OjA2OjM5WiJ9fQ==",
   "signatures": [
     {
       "keyid": "",
-      "sig": "MEQCIGBCqQZu6rmpKFOE2xFfbML4+lRD6Rjpqz9iZFkqCRulAiA0Gh1DILQJVrFRFYR4Mb/9chzumKDSo/BG++4n1H+0aA=="
+      "sig": "MEUCIQCaHlFoirGSgd6eE2vnIuxuaeVM7y8I+eb1drodT7CSZwIgQv47dqIdT1dZ17golS7Mi0Xevl8yAvNY6UfbDrbz/QI="
     }
   ]
 }
+
 
 
 ## if you decode the payload, you'll see the predicate and image attestations (build number, commit hash, timestamp and the prediecate KV pair we sent during build (foo=bar in consign_verify/policy.rego))
@@ -1315,20 +1325,20 @@ The following checks were performed on each of these signatures:
   "predicateType": "cosign.sigstore.dev/attestation/v1",
   "subject": [
     {
-      "name": "us-central1-docker.pkg.dev/builder-380817/repo1/tee",
+      "name": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee",
       "digest": {
-        "sha256": "c8e68920c1d44c35a2de031789ffdc52188aa8c580f4d7cb2eac841c8caaf151"
+        "sha256": "ae5054d5a25ff40eec2576be450764a323762a84ec78662c100b7972bcd433b4"
       }
     }
   ],
   "predicate": {
     "Data": "{ 
-      \"projectid\": \"builder-380817\", 
-      \"buildid\": \"593cf5f2-3588-4fd2-972b-3b2baf414530\", 
+      \"projectid\": \"mineral-minutia-820\", 
+      \"buildid\": \"343dbdfd-8b46-45c6-a54a-e11dbd6483af\", 
       \"foo\":\"bar\", 
-      \"commitsha\": \"dfaee2bcfb1ca13aae7d6316667ad73528f21204\" 
+      \"commitsha\": \"e1e21669ca8827e9356d29993ee5d6068d5eaa71\" 
     }",
-    "Timestamp": "2023-03-16T17:39:50Z"
+    "Timestamp": "2023-03-29T16:06:39Z"
   }
 }
 ```

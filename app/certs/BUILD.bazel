@@ -1,0 +1,5 @@
+exports_files([
+    "tls-ca-chain.pem",
+    "tee.crt",
+    "tee.key",
+    ])

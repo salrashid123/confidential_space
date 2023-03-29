@@ -122,6 +122,13 @@ def go_repositories():
         version = "v2.7.0",
     )
     go_repository(
+        name = "com_github_gorilla_mux",
+        importpath = "github.com/gorilla/mux",
+        sum = "h1:i40aqfkR1h2SlN9hojwV5ZA91wcXFOvkdNIeFDP5koI=",
+        version = "v1.8.0",
+    )
+
+    go_repository(
         name = "com_github_lestrrat_go_jwx",
         importpath = "github.com/lestrrat/go-jwx",
         sum = "h1:LbObMwh+lyWzIyVMd7iqsv1Az4EJDO0hURuSP1BFZcU=",

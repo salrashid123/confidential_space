@@ -7,6 +7,7 @@ require (
 	cloud.google.com/go/logging v1.6.1
 	cloud.google.com/go/pubsub v1.27.1
 	github.com/golang-jwt/jwt v3.2.2+incompatible
+	github.com/gorilla/mux v1.8.0
 	github.com/lestrrat/go-jwx v0.9.1
 	golang.org/x/oauth2 v0.5.0
 	google.golang.org/api v0.110.0
@@ -28,7 +29,7 @@ require (
 	github.com/lestrrat/go-pdebug v0.0.0-20180220043741-569c97477ae8 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/net v0.6.0 // indirect
+	golang.org/x/net v0.6.0
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/text v0.7.0 // indirect

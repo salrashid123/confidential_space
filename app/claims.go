@@ -57,7 +57,7 @@ type Claims struct {
 	OEMID                 uint64       `json:"oemid"`
 	HardwareModel         string       `json:"hwmodel"`
 	SoftwareName          string       `json:"swname"`
-	SoftwareVersion       string       `json:"swversion"`
+	SoftwareVersion       []string     `json:"swversion"`
 	Dbgstat               string       `json:"dbgstat"`
 	GoogleServiceAccounts []string     `json:"google_service_accounts"`
 	Submods               SubmodClaims `json:"submods"`

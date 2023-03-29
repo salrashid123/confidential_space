@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
-	"time"
 
 	"log"
 
@@ -25,17 +29,25 @@ import (
 	"github.com/lestrrat/go-jwx/jwk"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
+
+	"github.com/gorilla/mux"
+	"golang.org/x/net/http2"
 )
 
 var (
 	config                 = flag.String("config", "config.json", "Arbitrary config file")
 	attestation_token_path = flag.String("attestation_token_path", "/run/container_launcher/attestation_verifier_claims_token", "Path to Attestation Token file")
 	project_id             = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
-	serverShutdownTime     = flag.Int64("server_shutdown_time", 30, "shutdown TEE in mins")
+	ca_files               = flag.String("ca_files", "tls-ca-chain.pem", "RootCA Chain (PEM)")
+	tls_crt                = flag.String("tls_crt", "tee.crt", "TLS Certificate (PEM)")
+	tls_key                = flag.String("tls_key", "tee.key", "TLS KEY (PEM)")
 
 	// map to hold all the users currently found and the number of times
 	// they've been sent
 	users = map[string]int32{}
+
+	logger *log.Logger
+	mu     sync.Mutex
 )
 
 const (
@@ -44,6 +56,80 @@ const (
 	logName      = "cs-log"
 )
 
+type PostData struct {
+	Key           string `json:"key"`
+	Audience      string `json:"audience"`
+	EncryptedData string `json:"encrypted_data"`
+}
+
+func incrementCounter(ctx context.Context, audience, key string, data []byte) (string, int32, error) {
+	// bootstrap Collaborator credentials;  decrypt with KMS key
+	// note, we're creating a new kmsclient on demand based on what is sent in the message alone.
+	// realistically, the KMS audience and key would be using configuration values and not simply use what is sent in the message
+	logger.Printf("bootstrapping  KMS key [%s] for collaborator [%s]\n", key, audience)
+	c1_adc := fmt.Sprintf(`{
+	"type": "external_account",
+	"audience": "%s",
+	"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+	"token_url": "https://sts.googleapis.com/v1/token",
+	"credential_source": {
+	  "file": "%s"
+	}
+	}`, audience, *attestation_token_path)
+	kmsClient, err := kms.NewKeyManagementClient(ctx, option.WithCredentialsJSON([]byte(c1_adc)))
+	if err != nil {
+		logger.Printf("Error creating KMS client; skipping message %v\n", err)
+		return "", 0, err
+	} else {
+		c1_decrypted, err := kmsClient.Decrypt(ctx, &kmspb.DecryptRequest{
+			Name:       key,
+			Ciphertext: []byte(data),
+		})
+		if err != nil {
+			logger.Printf("Error decoding ciphertext for collaborator %v\n", err)
+			return "", 0, err
+		} else {
+			currentUser := string(c1_decrypted.Plaintext)
+			mu.Lock()
+			users[currentUser] = users[currentUser] + 1
+			mu.Unlock()
+			return currentUser, users[currentUser], nil
+		}
+	}
+}
+
+func posthandler(w http.ResponseWriter, r *http.Request) {
+	var post PostData
+	err := json.NewDecoder(r.Body).Decode(&post)
+	if err != nil {
+		logger.Printf("Error parsing POST data")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	logger.Printf("Got POST Data  %v\n", post)
+
+	if post.Audience == "" || post.Key == "" {
+		logger.Printf("Error: post data must include an audience and key")
+		http.Error(w, "post data must include an audience and key", http.StatusBadRequest)
+		return
+	}
+	b, err := base64.StdEncoding.DecodeString(post.EncryptedData)
+	if err != nil {
+		logger.Printf("Error b64 decoding POST data")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	u, c, err := incrementCounter(r.Context(), post.Audience, post.Key, b)
+	if err != nil {
+		logger.Printf("Error parsing POST data")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprint(w, fmt.Sprintf("%s %d\n", u, c))
+}
+
 func main() {
 
 	flag.Parse()
@@ -51,7 +137,7 @@ func main() {
 	ctx := context.Background()
 
 	// configure a logger client
-	logger := log.Default()
+	logger = log.Default()
 
 	// try to derive the projectID from the default metadata server creds
 	creds, err := google.FindDefaultCredentials(ctx)
@@ -119,7 +205,6 @@ func main() {
 	logger.Printf("Config file %v\n", config)
 
 	// print the attestation JSON
-
 	attestation_encoded, err := os.ReadFile(*attestation_token_path)
 	if err != nil {
 		logger.Printf("error reading attestation file %v\n", err)
@@ -163,69 +248,69 @@ func main() {
 		return
 	}
 
-	//  Start listening to pubsub messages
-	client, err := pubsub.NewClient(ctx, *project_id)
+	//  Start listening to pubsub messages on background
+	pubsubClient, err := pubsub.NewClient(ctx, *project_id)
 	if err != nil {
 		logger.Printf("Error creating pubsub client %v\n", err)
 		runtime.Goexit()
 	}
-	defer client.Close()
+	defer pubsubClient.Close()
 
 	logger.Printf("Beginning subscription: %s\n", subscription)
-
-	sub := client.Subscription(subscription)
-
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(*serverShutdownTime)*time.Minute)
-	defer cancel()
-
-	var received int32
-	var mu sync.Mutex
-	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-		logger.Printf("Got MessageID ID: %s\n", msg.ID)
-		received++
-		key, keyok := msg.Attributes["key"]
-		audience, audienceok := msg.Attributes["audience"]
-
-		if keyok && audienceok {
-			// bootstrap Collaborator credentials;  decrypt with KMS key
-			// note, we're creating a new kmsclient on demand based on what is sent in the message alone.
-			// realistically, the KMS audience and key would be using configuration values and not simply use what is sent in the message
-			logger.Printf("bootstrapping  KMS key [%s] for collaborator [%s]\n", key, audience)
-			c1_adc := fmt.Sprintf(`{
-		"type": "external_account",
-		"audience": "%s",
-		"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-		"token_url": "https://sts.googleapis.com/v1/token",
-		"credential_source": {
-		  "file": "%s"
-		}
-		}`, audience, *attestation_token_path)
-			kmsClient, err := kms.NewKeyManagementClient(ctx, option.WithCredentialsJSON([]byte(c1_adc)))
-			if err != nil {
-				logger.Printf("Error creating KMS client; skipping message %v\n", err)
-			} else {
-				c1_decrypted, err := kmsClient.Decrypt(ctx, &kmspb.DecryptRequest{
-					Name:       key,
-					Ciphertext: msg.Data,
-				})
+	sub := pubsubClient.Subscription(subscription)
+	go func(ctx context.Context) {
+		err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+			logger.Printf("Got MessageID ID: %s\n", msg.ID)
+			key, keyok := msg.Attributes["key"]
+			audience, audienceok := msg.Attributes["audience"]
+			if keyok && audienceok {
+				u, c, err := incrementCounter(ctx, audience, key, msg.Data)
 				if err != nil {
-					logger.Printf("Error decoding ciphertext for collaborator %v\n", err)
+					logger.Printf("error incrementing counter: %v\n", err)
 				} else {
-					currentUser := string(c1_decrypted.Plaintext)
-					mu.Lock()
-					users[currentUser] = users[currentUser] + 1
-					logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", currentUser, users[currentUser])
-					mu.Unlock()
+					logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", u, c)
 				}
+			} else {
+				logger.Printf("key or audience attribute not sent; skipping message processing\n")
 			}
-		} else {
-			logger.Printf("key or audience attribute not sent; skipping message processing\n")
+			msg.Ack()
+		})
+		if err != nil {
+			logger.Printf("Error reading pubsub subscription %v\n", err)
+			runtime.Goexit()
 		}
-		msg.Ack()
-	})
+	}(ctx)
+
+	// // start http server on main
+	router := mux.NewRouter()
+	router.Methods(http.MethodPost).Path("/").HandlerFunc(posthandler)
+	clientCaCert, err := ioutil.ReadFile(*ca_files)
 	if err != nil {
-		logger.Printf("Error reading pubsub subscription %v\n", err)
+		logger.Printf("Error reading ca_file %v\n", err)
 		runtime.Goexit()
 	}
-	logger.Printf("Shutting down server after reading %d messages\n", received)
+	clientCaCertPool := x509.NewCertPool()
+	clientCaCertPool.AppendCertsFromPEM(clientCaCert)
+
+	tlsConfig := &tls.Config{
+		ClientCAs:  clientCaCertPool,
+		ClientAuth: tls.RequireAndVerifyClientCert,
+	}
+
+	var server *http.Server
+	server = &http.Server{
+		Addr:      ":8081",
+		Handler:   router,
+		TLSConfig: tlsConfig,
+	}
+	http2.ConfigureServer(server, &http2.Server{})
+	logger.Println("Starting HTTP Server..")
+
+	err = server.ListenAndServeTLS(*tls_crt, *tls_key)
+	if err != nil {
+		logger.Printf("Error Starting TLS Server %v\n", err)
+		runtime.Goexit()
+	}
+
+	logger.Println("Shutting down server")
 }
