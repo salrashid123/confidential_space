@@ -1500,6 +1500,11 @@ The following checks were performed on each of these signatures:
 # download the bom 
 cosign download sbom --output-file  latest.spdx.download \
       us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:2a793fa4917428fe0c3fd2e6b807c5ddc81369071bbf5624427411d13b30c3ef 
+      
+      
+wget https://github.com/salrashid123/confidential_space/releases/download/v1.0.0/kms_pub.pem .
+cosign verify --key kms_pub.pem --attachment=sbom    docker.io/salrashid123/tee@sha256:2a793fa4917428fe0c3fd2e6b807c5ddc81369071bbf5624427411d13b30c3ef
+      
 ```
 
 - Verify application sbom:
