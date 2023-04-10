@@ -62,6 +62,26 @@ type PostData struct {
 	EncryptedData string `json:"encrypted_data"`
 }
 
+// contextKey is used to pass http middleware certificate details
+type contextKey string
+
+const contextEventKey contextKey = "event"
+
+type event struct {
+	PeerCertificates []*x509.Certificate
+}
+
+// middleware to extract the mtls client certificate subject
+func eventsMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		event := &event{
+			PeerCertificates: r.TLS.PeerCertificates,
+		}
+		ctx := context.WithValue(r.Context(), contextEventKey, *event)
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func incrementCounter(ctx context.Context, audience, key string, data []byte) (string, int32, error) {
 	// bootstrap Collaborator credentials;  decrypt with KMS key
 	// note, we're creating a new kmsclient on demand based on what is sent in the message alone.
@@ -91,14 +111,17 @@ func incrementCounter(ctx context.Context, audience, key string, data []byte) (s
 		} else {
 			currentUser := string(c1_decrypted.Plaintext)
 			mu.Lock()
+			defer mu.Unlock()
 			users[currentUser] = users[currentUser] + 1
-			mu.Unlock()
 			return currentUser, users[currentUser], nil
 		}
 	}
 }
 
 func posthandler(w http.ResponseWriter, r *http.Request) {
+	val := r.Context().Value(contextKey("event")).(event)
+	logger.Printf("PeerCertificates count %d\n", len(val.PeerCertificates))
+
 	var post PostData
 	err := json.NewDecoder(r.Body).Decode(&post)
 	if err != nil {
@@ -300,7 +323,7 @@ func main() {
 	var server *http.Server
 	server = &http.Server{
 		Addr:      ":8081",
-		Handler:   router,
+		Handler:   eventsMiddleware(router),
 		TLSConfig: tlsConfig,
 	}
 	http2.ConfigureServer(server, &http2.Server{})

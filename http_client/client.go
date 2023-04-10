@@ -18,15 +18,14 @@ import (
 )
 
 var (
-	topicProject = flag.String("topicProject", "vegas-codelab-5", "ProjectID for the topic to post messages to")
-	kmsKey       = flag.String("kmsKey", "projects/collaborator-1/locations/global/keyRings/kr1/cryptoKeys/key1", "KMS Key to use")
-	audience     = flag.String("audience", "//iam.googleapis.com/projects/248928956783/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier", "Collaborator's audience value")
-	user         = flag.String("user", "alice", "user to submit data for")
-	host         = flag.String("host", "", "host ip:port to connect to")
-	server_name  = flag.String("server_name", "tee.operatordomain.com", "SNI of the server")
-	ca_files     = flag.String("ca_files", "certs/tls-ca-chain.pem", "RootCA Chain (PEM)")
-	tls_crt      = flag.String("tls_crt", "certs/client.crt", "TLS Certificate (PEM)")
-	tls_key      = flag.String("tls_key", "certs/client.key", "TLS KEY (PEM)")
+	kmsKey      = flag.String("kmsKey", "projects/collaborator-1/locations/global/keyRings/kr1/cryptoKeys/key1", "KMS Key to use")
+	audience    = flag.String("audience", "//iam.googleapis.com/projects/248928956783/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier", "Collaborator's audience value")
+	user        = flag.String("user", "alice", "user to submit data for")
+	host        = flag.String("host", "", "host ip:port to connect to")
+	server_name = flag.String("server_name", "tee.operatordomain.com", "SNI of the server")
+	ca_files    = flag.String("ca_files", "certs/tls-ca-chain.pem", "RootCA Chain (PEM)")
+	tls_crt     = flag.String("tls_crt", "certs/client.crt", "TLS Certificate (PEM)")
+	tls_key     = flag.String("tls_key", "certs/client.key", "TLS KEY (PEM)")
 )
 
 type PostData struct {

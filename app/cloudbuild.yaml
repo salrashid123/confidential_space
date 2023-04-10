@@ -45,6 +45,35 @@ steps:
     waitFor: ['push','sign_kms']
 
 
+  - name: docker.io/anchore/syft@sha256:0f36bf87fcc63ffdbc64cec6c74d855941351dfeeb38fcc5cef46a2aa8302ceb
+    id: generate_sbom
+    args:
+    - packages  
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
+    - -o=spdx
+    - --file=/workspace/latest.spdx
+    waitFor: ['push']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: attach_sbom
+    args:
+    - attach 
+    - sbom 
+    - --sbom=/workspace/latest.spdx
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
+    waitFor: ['generate_sbom']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: sign_sbom 
+    args:
+    - sign
+    - --annotations=commit_sha=$COMMIT_SHA
+    - --attachment=sbom
+    - --key
+    - gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1
+    - us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
+    waitFor: ['attach_sbom']
+
 serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cosign@$PROJECT_ID.iam.gserviceaccount.com'
 options:
   logging: CLOUD_LOGGING_ONLY
