@@ -11,7 +11,7 @@ scoop:
   name: confidential_space
   commit_author:
     name: sal
-    email: salrashid@gmail.com
+    email: salrashid123@gmail.com
   commit_msg_template: Scoop update for {{ .ProjectName }} version {{ .Tag }}
   goamd64: v1
 builds:

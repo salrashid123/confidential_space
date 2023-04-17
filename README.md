@@ -801,7 +801,17 @@ If the TEE attempts to access the STS or KMS endpoint for any collaborator who _
 
 The object that is decrypted within a TEE can easily be a keypair used to establish or receive an mTLS connection.  
 
-In this mode, a trusted party may choose to send an mTLS keypair to the TEE which it then uses to make a new outbound connection to a service which expects that that client certificate.
+For outbound, a collaborator may choose to send an mTLS keypair to the TEE which it then uses to make a new connection to a service which expects that that client certificate.
+
+There are several ways to achieve this where a pregenerated collaborator provided TLS CA and key pair is surfaced through a collaborator's own `Secret Manager` or using `GCP Private CA` to sign a CSR. (i.,e, instead of making KMS API calls back to a collaborators KMS syste, each collaborator unseals their secret or issues their own x509 within the TEE)
+
+You can find basic examples of seedign a generic key into secret manager or issuing a cert via private ca [here](https://gist.github.com/salrashid123/f06eacd80a25611a7c322d8e6f99942f)
+
+For inbound traffic, its the same but you can use one listener port that enforces different collaborators mtls CAs.  In this mode, each collaborator seeds the TEE with its own CA for client certs and its own server certificates.
+
+A client will connect to the common listner port and perform mTLS using a client cert issued by a specific collaborators CA.  The client can also validate the server certificate was issued by that CA.  You can find an example of that at
+
+* [go mTLS with multiple certificate issuers and OCSP verification](https://github.com/salrashid123/go_mtls_scratchpad#tls-config-without-client-ca)
 
 Altarnatively, the mtls connection can be used to in a 'multi-party' capability which different collaborators each holds their keysiare which is used together to create the TLS connection.  This idea is explored in the following repo:
 
