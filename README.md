@@ -70,6 +70,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
   - [Using Hashicorp Vault](#using-hashicorp-vault)
+  - [Service Discovery](#service-discovery)  
   - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)    
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
   - [Software Bill of Materials](#software-bill-of-materials)
@@ -1280,6 +1281,27 @@ vault kv get kv/message
 also see
 
 - [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
+
+#### Service Discovery
+
+Networking between TEEs necessarily needs to be done over TLS or preferably mTLS using the one of the techniques outlined in the sections above.  
+
+Basically, the TEE->TEE traffic first needs one TEE to discovery the address resolution of another TEE peer.  Once thats done, the TLS connection needs to be such that they 'trust each other' (see mTLS section)
+
+There are many ways to establish service disovery of the TEE cluster/peers depending on the topoloy.  The service discovery system by itself can be hosted entirely by the operator in this case if the peer TLS is mutually trusted by bootstrapping after attestation.   In other words, even if the operator injects false TEE peer addresses, a client TEE cannot establish a TLS connection with the server since the server would not have bootstrapped mTLS credentials.
+
+Anyway, the various service discovery mechanisms
+* [DNS Based Service Directory with TCP Internal Load Balancer](https://gist.github.com/salrashid123/93d899503d5799f10745a9fe7c89de87)
+
+  With this, the GCP Service Directory is used to specify the address of an internal load balancer for a group of TEE backends
+
+* [Proxyless gRPC with Google Traffic Director](https://github.com/salrashid123/grpc_xds_traffic_director)
+
+  With this, each gRPC client acquires peer addresses from Traffic Director
+
+* [Hashicorp Consul JWT Auth](https://github.com/salrashid123/consul_jwt_auth)
+
+  Uses an external service where each client 'registers' itself to consul by presenting it with an OIDC attestation token
 
 #### Threshold Encryption and Signatures
 
