@@ -1,0 +1,134 @@
+steps:
+  - name: gcr.io/kaniko-project/executor@sha256:034f15e6fe235490e64a4173d02d0a41f61382450c314fffed9b8ca96dff66b2
+    id: build
+    args:
+      [
+        "--dockerfile=Dockerfile",
+        "--context=dir:///workspace",
+        "--reproducible",
+        "--image-name-with-digest-file=/workspace/name_hash.txt",
+        "--destination=us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server",
+      ] 
+
+  - id: attestations
+    name: docker.io/library/ubuntu@sha256:67211c14fa74f070d27cc59d69a7fa9aeff8e28ea118ef3babc295a0428a6d21
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        echo -n '{ "projectid": "$PROJECT_ID", "buildid": "$BUILD_ID", "foo":"bar", "commitsha": "$COMMIT_SHA"}' > /workspace/predicates.json
+    waitFor: ['build']
+    
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: sign_kms
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |
+      cosign sign --annotations=key1=value1 --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
+    waitFor: ['build']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: attest_kms
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |
+      cosign attest --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/predicates.json -y $(cat /workspace/name_hash.txt)
+    waitFor: ['build','sign_kms']
+
+  - name: docker.io/anchore/syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b
+    id: generate_packages_attestation
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |    
+      /syft packages  -o cyclonedx-json --file=/workspace/packages.json $(/busybox/cat /workspace/name_hash.txt)
+    waitFor: ['build','sign_kms']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: attest_packages_kms
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |
+      cosign attest --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y $(cat /workspace/name_hash.txt)
+    waitFor: ['generate_packages_attestation']    
+
+  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  #   id: sign_oidc
+  #   env:
+  #   - REGISTRY=us-central1-docker.pkg.dev
+  #   - TUF_ROOT=/tmp    
+  #   - COSIGN_EXPERIMENTAL=1
+  #   - GOOGLE_SERVICE_ACCOUNT_NAME=cosign@$PROJECT_ID.iam.gserviceaccount.com  
+  #   entrypoint: 'sh'
+  #   args:      
+  #   - '-c'
+  #   - |
+  #     cosign sign --annotations=key1=value1 -f -y $(cat /workspace/name_hash.txt)
+  #   waitFor: ['attestations']
+
+  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  #   id: attest_oidc
+  #   env:
+  #   - REGISTRY=us-central1-docker.pkg.dev
+  #   - TUF_ROOT=/tmp    
+  #   - COSIGN_EXPERIMENTAL=1
+  #   - GOOGLE_SERVICE_ACCOUNT_NAME=cosign@$PROJECT_ID.iam.gserviceaccount.com  
+  #   entrypoint: 'sh'
+  #   args:      
+  #   - '-c'
+  #   - |
+  #     cosign attest -f --predicate=/workspace/predicates.json -y  $(cat /workspace/name_hash.txt)
+  #   waitFor: ['sign_oidc']    
+
+  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  #   id: attest_packages_oidc
+  #   env:
+  #   - REGISTRY=us-central1-docker.pkg.dev
+  #   - TUF_ROOT=/tmp    
+  #   - COSIGN_EXPERIMENTAL=1
+  #   - GOOGLE_SERVICE_ACCOUNT_NAME=cosign@$PROJECT_ID.iam.gserviceaccount.com  
+  #   entrypoint: 'sh'
+  #   args:      
+  #   - '-c'
+  #   - |
+  #     cosign attest -f --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y  $(cat /workspace/name_hash.txt)
+  #   waitFor: ['generate_packages_attestation']    
+
+
+  # note, syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b is the *debug* image because it provides a shell
+  - name: docker.io/anchore/syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b
+    id: generate_sbom
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |    
+      /syft packages $(/busybox/cat /workspace/name_hash.txt) -o=spdx --file=/workspace/latest.spdx
+    waitFor: ['build']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: attach_sbom
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |
+      cosign attach sbom --sbom=/workspace/latest.spdx $(cat /workspace/name_hash.txt)
+    waitFor: ['generate_sbom']
+
+  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+    id: sign_sbom 
+    entrypoint: 'sh'
+    args:      
+    - '-c'
+    - |
+      cosign sign --annotations=commit_sha=$COMMIT_SHA --attachment=sbom --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
+    waitFor: ['attach_sbom']
+
+
+serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cosign@$PROJECT_ID.iam.gserviceaccount.com'
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'N1_HIGHCPU_32'

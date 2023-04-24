@@ -22,10 +22,10 @@ var (
 	audience    = flag.String("audience", "//iam.googleapis.com/projects/248928956783/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier", "Collaborator's audience value")
 	user        = flag.String("user", "alice", "user to submit data for")
 	host        = flag.String("host", "", "host ip:port to connect to")
-	server_name = flag.String("server_name", "tee.operatordomain.com", "SNI of the server")
-	ca_files    = flag.String("ca_files", "certs/tls-ca-chain.pem", "RootCA Chain (PEM)")
-	tls_crt     = flag.String("tls_crt", "certs/client.crt", "TLS Certificate (PEM)")
-	tls_key     = flag.String("tls_key", "certs/client.key", "TLS KEY (PEM)")
+	server_name = flag.String("server_name", "tee.operator.com", "SNI of the server")
+	ca_files    = flag.String("ca_files", "", "RootCA Chain (PEM)")
+	tls_crt     = flag.String("tls_crt", "", "TLS Certificate (PEM)")
+	tls_key     = flag.String("tls_key", "", "TLS KEY (PEM)")
 )
 
 type PostData struct {
@@ -86,7 +86,7 @@ func main() {
 		panic(err)
 	}
 
-	resp, err := client.Post(fmt.Sprintf("https://%v/", *host), "application/json", bytes.NewBuffer(body))
+	resp, err := client.Post(fmt.Sprintf("https://%s/", *host), "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		panic(err)
 	}

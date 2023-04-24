@@ -24,7 +24,6 @@ builds:
       - v1
     targets:
       - linux_amd64_v1
-    dir: ./app
     binary: confidential_space
     builder: go
     gobinary: go

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -38,9 +40,20 @@ var (
 	config                 = flag.String("config", "config.json", "Arbitrary config file")
 	attestation_token_path = flag.String("attestation_token_path", "/run/container_launcher/attestation_verifier_claims_token", "Path to Attestation Token file")
 	project_id             = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
-	ca_files               = flag.String("ca_files", "tls-ca-chain.pem", "RootCA Chain (PEM)")
-	tls_crt                = flag.String("tls_crt", "tee.crt", "TLS Certificate (PEM)")
-	tls_key                = flag.String("tls_key", "tee.key", "TLS KEY (PEM)")
+
+	// for mtls certificates
+	default_ca      = flag.String("default_ca", "root-ca-operator.crt", "Operator RootCA Chain (PEM)")
+	default_tls_crt = flag.String("default_tls_crt", "tee-operator.crt", "Operator TLS Certificate (PEM)")
+	default_tls_key = flag.String("default_tls_key", "tee-operator.key", "Operator TLS KEY (PEM)")
+
+	// collaborator mtls certs and keys materialized within the TEE
+	collaborator1_ca      = flag.String("collaborator1_ca", "root-ca-collaborator1.crt", "Collaborator 1 RootCA Chain (PEM)")
+	collaborator1_tls_crt = flag.String("collaborator1_tls_crt", "tee-collaborator1.crt", "Collaborator 1 TLS Certificate (PEM)")
+	collaborator1_tls_key = flag.String("collaborator1_tls_key", "tee-collaborator1.key", "Collaborator 1 TLS KEY (PEM)")
+
+	collaborator2_ca      = flag.String("collaborator2_ca", "root-ca-collaborator2.crt", "Collaborator 2 RootCA Chain (PEM)")
+	collaborator2_tls_crt = flag.String("collaborator2_tls_crt", "tee-collaborator2.crt", "Collaborator 2 TLS Certificate (PEM)")
+	collaborator2_tls_key = flag.String("collaborator2_tls_key", "tee-collaborator2.key", "Collaborator 2 TLS KEY (PEM)")
 
 	// map to hold all the users currently found and the number of times
 	// they've been sent
@@ -71,15 +84,68 @@ type event struct {
 	PeerCertificates []*x509.Certificate
 }
 
-// middleware to extract the mtls client certificate subject
 func eventsMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "Userip is not host:port", http.StatusBadGateway)
+			return
+		}
+		userIP := net.ParseIP(ip)
+		if userIP == nil {
+			http.Error(w, "error parsing remote IP", http.StatusBadGateway)
+			return
+		}
+		logger.Printf("Request client IP: %s\n", ip)
+
+		// cert verification was already done during tls.Config.GetConfigForClient earlier
+		//   where we only allow client certs and cas from the collaborators specifically.
+		//   this is just a recheck
+		if len(r.TLS.VerifiedChains) == 0 {
+			logger.Printf("Unverified client certificate from: %s\n", ip)
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+		// for gcp healthchecks if we allow mtls bypass only for /healthz endpoint
+		// if r.URL.Path == "/healthz" {
+		// 	// https://cloud.google.com/load-balancing/docs/l7-internal#firewall_rules
+		// 	lbSubnetA := "35.191.0.0/16"
+		// 	lbSubnetB := "130.211.0.0/22"
+		// 	_, ipnetA, err := net.ParseCIDR(lbSubnetA)
+		// 	if err != nil {
+		// 		logger.Printf("Error checking remote IP Subnet: %s\n", ip)
+		// 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// 		return
+		// 	}
+		// 	_, ipnetB, err := net.ParseCIDR(lbSubnetB)
+		// 	if err != nil {
+		// 		logger.Printf("Error checking remote IP Subnet: %s\n", ip)
+		// 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// 		return
+		// 	}
+		// 	c1 := net.ParseIP(ip)
+
+		// 	if !(ipnetA.Contains(c1) || ipnetB.Contains(c1)) {
+		// 		logger.Printf("Error Healthcheck request not from LB Subnet: %s\n", ip)
+		// 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// 		return
+		// 	}
+		// } else if len(r.TLS.VerifiedChains) == 0 {
+		// 	logger.Printf("Error: only /healthz endpoint is allowed without client certificates: %s\n", ip)
+		// 	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		// 	return
+		// }
+
 		event := &event{
 			PeerCertificates: r.TLS.PeerCertificates,
 		}
 		ctx := context.WithValue(r.Context(), contextEventKey, *event)
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func healthhandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, "ok")
 }
 
 func incrementCounter(ctx context.Context, audience, key string, data []byte) (string, int32, error) {
@@ -120,7 +186,12 @@ func incrementCounter(ctx context.Context, audience, key string, data []byte) (s
 
 func posthandler(w http.ResponseWriter, r *http.Request) {
 	val := r.Context().Value(contextKey("event")).(event)
-	logger.Printf("PeerCertificates count %d\n", len(val.PeerCertificates))
+	// note val.PeerCertificates[0] is the leaf
+	for _, c := range val.PeerCertificates {
+		h := sha256.New()
+		h.Write(c.Raw)
+		fmt.Printf("Client Certificate hash %s\n", base64.RawURLEncoding.EncodeToString(h.Sum(nil)))
+	}
 
 	var post PostData
 	err := json.NewDecoder(r.Body).Decode(&post)
@@ -304,20 +375,101 @@ func main() {
 		}
 	}(ctx)
 
-	// // start http server on main
+	// start http server on main
 	router := mux.NewRouter()
 	router.Methods(http.MethodPost).Path("/").HandlerFunc(posthandler)
-	clientCaCert, err := ioutil.ReadFile(*ca_files)
+	router.Methods(http.MethodGet).Path("/healthz").HandlerFunc(healthhandler)
+
+	// load default server certs
+	default_server_certs, err := tls.LoadX509KeyPair(*default_tls_crt, *default_tls_key)
 	if err != nil {
-		logger.Printf("Error reading ca_file %v\n", err)
+		logger.Printf("Error loading default certificates %v\n", err)
 		runtime.Goexit()
 	}
-	clientCaCertPool := x509.NewCertPool()
-	clientCaCertPool.AppendCertsFromPEM(clientCaCert)
 
+	// load the CA client cert and server certificates
+	// load rootCA for CA_1
+	client1_root, err := ioutil.ReadFile(*collaborator1_ca)
+	if err != nil {
+		logger.Printf("Error loading collaborator1 ca certificate %v\n", err)
+		runtime.Goexit()
+	}
+
+	client1_root_pool := x509.NewCertPool()
+	client1_root_pool.AppendCertsFromPEM(client1_root)
+
+	// load rootCA for CA_2
+	client2_root, err := ioutil.ReadFile(*collaborator2_ca)
+	if err != nil {
+		logger.Printf("Error loading collaborator2 ca certificate %v\n", err)
+		runtime.Goexit()
+	}
+
+	client2_root_pool := x509.NewCertPool()
+	client2_root_pool.AppendCertsFromPEM(client2_root)
+
+	// load the server certs issued by both ca1 and ca2, pretend these should use get loaded
+	// from each collaborators's secret manager or private ca using the attestation token (similar to the KMS decryption)
+	server1_cert, err := tls.LoadX509KeyPair(*collaborator1_tls_crt, *collaborator1_tls_key)
+	if err != nil {
+		logger.Printf("Error loading collaborator1 server certificates %v\n", err)
+		runtime.Goexit()
+	}
+
+	server2_cert, err := tls.LoadX509KeyPair(*collaborator2_tls_crt, *collaborator2_tls_key)
+	if err != nil {
+		logger.Printf("Error loading collaborator2 server certificates %v\n", err)
+		runtime.Goexit()
+	}
+
+	// *****************************************
+
+	// set TLS configs based on the SNI of the requestor.
+	// the following sets custom TLS enforcements where both client and server cert enforcement is controlled
+	// by each collaborator (i.,e a client for collaborator can set client and server certs for their own use)
+	// basically, if the certificates are materialized by each collaborator using workload federation, then each
+	// client that connects _to_ the TEE using mTLS must be authorized by each individual collaborator by issuing them client certificates
+	//   the only SNI that does not require client certs is the /healthz healthcheck path which is checked within eventsMiddleware().  That capability is current commented out
 	tlsConfig := &tls.Config{
-		ClientCAs:  clientCaCertPool,
-		ClientAuth: tls.RequireAndVerifyClientCert,
+		NextProtos:   []string{"h2", "http/1.1"},
+		Certificates: []tls.Certificate{default_server_certs}, // have to specify something here though its not used
+		MinVersion:   tls.VersionTLS13,
+		GetConfigForClient: func(ci *tls.ClientHelloInfo) (*tls.Config, error) {
+			if ci.ServerName == "tee.collaborator1.com" {
+				return &tls.Config{
+					NextProtos: []string{"h2", "http/1.1"},
+					MinVersion: tls.VersionTLS13,
+					ClientAuth: tls.RequireAndVerifyClientCert,
+					ClientCAs:  client1_root_pool,
+					GetCertificate: func(ci *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						return &server1_cert, nil
+					},
+				}, nil
+			}
+			if ci.ServerName == "tee.collaborator2.com" {
+				return &tls.Config{
+					NextProtos: []string{"h2", "http/1.1"},
+					MinVersion: tls.VersionTLS13,
+					ClientAuth: tls.RequireAndVerifyClientCert,
+					ClientCAs:  client2_root_pool,
+					GetCertificate: func(ci *tls.ClientHelloInfo) (*tls.Certificate, error) {
+						return &server2_cert, nil
+					},
+				}, nil
+			}
+
+			// if you want to handle a bypass for healthchecks without mtls, verify the gcp loadbalancer ip here using
+			//  ip =  net.ParseIP(ci.Conn.RemoteAddr().String())  in  ["35.191.0.0/16","130.211.0.0/22"]
+
+			// return &tls.Config{
+			// 	NextProtos: []string{"h2", "http/1.1"},
+			// 	MinVersion: tls.VersionTLS13,
+			// 	GetCertificate: func(ci *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			// 		return &default_server_certs, nil
+			// 	},
+			// }, nil
+			return nil, fmt.Errorf("SNI not recognized %s", ci.ServerName)
+		},
 	}
 
 	var server *http.Server
@@ -329,7 +481,7 @@ func main() {
 	http2.ConfigureServer(server, &http2.Server{})
 	logger.Println("Starting HTTP Server..")
 
-	err = server.ListenAndServeTLS(*tls_crt, *tls_key)
+	err = server.ListenAndServeTLS("", "")
 	if err != nil {
 		logger.Printf("Error Starting TLS Server %v\n", err)
 		runtime.Goexit()

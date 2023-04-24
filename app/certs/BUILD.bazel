@@ -1,5 +1,11 @@
 exports_files([
-    "tls-ca-chain.pem",
-    "tee.crt",
-    "tee.key",
+    "root-ca-operator.crt",
+    "tee-operator.crt",
+    "tee-operator.key",
+    "root-ca-collaborator1.crt",
+    "tee-collaborator1.crt",
+    "tee-collaborator1.key",
+    "root-ca-collaborator2.crt",
+    "tee-collaborator2.crt",
+    "tee-collaborator2.key",
     ])

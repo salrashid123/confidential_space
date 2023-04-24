@@ -1,4 +1,4 @@
-FROM golang:1.19 as build
+FROM golang@sha256:9f2dd04486e84eec72d945b077d568976981d9afed8b4e2aeb08f7ab739292b3 as build
 
 WORKDIR /go/src/app
 COPY . .
@@ -17,9 +17,17 @@ LABEL "tee.launch_policy.log_redirect"="always"
 COPY --from=build /go/bin/server /
 COPY --from=build /go/src/app/config.json /config.json
 
-COPY --from=build /go/src/app/certs/tls-ca-chain.pem /tls-ca-chain.pem
-COPY --from=build /go/src/app/certs/tee.crt /tee.crt
-COPY --from=build /go/src/app/certs/tee.key /tee.key
+COPY --from=build /go/src/app/certs/root-ca-operator.crt /root-ca-operator.crt
+COPY --from=build /go/src/app/certs/tee-operator.crt /tee-operator.crt
+COPY --from=build /go/src/app/certs/tee-operator.key /tee-operator.key
+
+COPY --from=build /go/src/app/certs/root-ca-collaborator1.crt /root-ca-collaborator1.crt
+COPY --from=build /go/src/app/certs/tee-collaborator1.crt /tee-collaborator1.crt
+COPY --from=build /go/src/app/certs/tee-collaborator1.key /tee-collaborator1.key
+
+COPY --from=build /go/src/app/certs/root-ca-collaborator2.crt /root-ca-collaborator2.crt
+COPY --from=build /go/src/app/certs/tee-collaborator2.crt /tee-collaborator2.crt
+COPY --from=build /go/src/app/certs/tee-collaborator2.key /tee-collaborator2.key
 
 EXPOSE 8081
 

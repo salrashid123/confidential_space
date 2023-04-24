@@ -1,4 +1,4 @@
-module github.com/salrashid123/gcp-confidential-space/app
+module github.com/salrashid123/confidential_space/app
 
 go 1.19
 
