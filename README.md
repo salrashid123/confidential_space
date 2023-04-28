@@ -71,7 +71,8 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
   - [Using Hashicorp Vault](#using-hashicorp-vault)
   - [Service Discovery](#service-discovery)  
-  - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)    
+  - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)
+  - [Container image signing and verification](#container-image-signing-and-verification)      
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
   - [Software Bill of Materials](#software-bill-of-materials)
   - [goreleaser](#goreleaser)
@@ -1339,6 +1340,49 @@ For use with KMS, each participant would encrypt the binary form of the marshall
 
 * [Threshold Signatures](https://gist.github.com/salrashid123/c936fcbaa40c403232351f67c17ee12f)
 * [Threshold Encryption](https://gist.github.com/salrashid123/a871efff662a047257879ce7bffb9f13)
+
+#### Container image signing and verification
+
+Confidential Space has no built in capability for [Cryptographic Signing for Containers](https://aws.amazon.com/blogs/containers/cryptographic-signing-for-containers/) or any way to ensure that N parties provided their [signatures against the image](https://blog.sigstore.dev/cosign-image-signatures-77bab238a93/) itself.
+
+While each collaborator can ensure a specific image hash is exclusively authorized to access their KMS key, there is no direct mechanims that ensures the container was approved and authorized (i.,e signed) by outside parties.
+
+GCP provides [binary authorization](https://cloud.google.com/binary-authorization) which seeks to only allow a specific container to be _deployed_ to managed services like GKE, Cloud Run and Anthos if N parties provided [attestations](https://cloud.google.com/binary-authorization/docs/attestations) by means of a signature.
+
+In the case of Confidential Space, the operator is in charge of the deployment which means if each collaborator needs to ensure N parties provided their signatures, they cannot rely on deployment admission controllers because that is not detached from the operators control.
+
+There are several alternatives where the signature checks happen during runtime (late binding) or prior to authorizing the image for KMS access (early binding)
+
+- `early binding`
+
+  If a collaborator wants to ensure that the operator or some third party submitted/attested the container+hash, the collaborator can "just verify" that was done prior to authorizing the container for KMS access.
+
+  This would require the workflow pipleine for each collaborator to get notification of a new candidate image for deployment, then check if the requsite signatures were provided and only then authorize KMS access specifically for that image.
+
+  The specific workflows involved for the notification and verification of candidate containers is implementation dependent and is not covered here.
+
+  If `sigstore/cosign` is used the collaborator would need to iterate over the public keys for each attestor he/she is interested in and then once satisfied, proceed to authorize the image.   The section below describes using cosign cli and api to verify containers.
+
+  If [gcp binary authorization](https://cloud.google.com/binary-authorization) is used by the operator as the "signature system", the collaborator can verify N parties provided signatures by invoking the operators binary authorization api, then reading and verifying which parties provided signatures (eg the collaborator would run `gcloud beta container binauthz attestations list --attestor=myattestor --project=$OPERATOR_PROJECT_ID` prior to authorization). A more formal confirmation that signatures were provided could be if the operator enabled GCP Audit Logs for the binaryauthorization API.  If that step is done, each attestation is encoded in the operators audit log permanently.  [Here](https://gist.github.com/salrashid123/2ca607fee4977244136cb1ae0d37173f) is an example of Binary Authorization Audit Log.  Once in audit log, the collabortors can subscribe to events via GCP [eventarc](https://cloud.google.com/eventarc/docs/event-driven-architectures) which can notify of any new signatures or changes.   
+
+  Finally, authorizing at a per image hash scope is made a bit easier with this repo since it does _not_ setup full authorization at the [workload provider and pool](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-clouds#oidc) level and instead sets it at the resource IAM binding:
+  
+  ```bash
+  gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:7d670a791b38046fbda01e22b466ecd235d368a3fc5ae5aa6c05169c475d0d76"  \
+     --role=roles/cloudkms.cryptoKeyDecrypter
+  ```
+
+  This allows for multiple, rapid IAM binding at the resource per image without defining a new pool.
+
+
+- `late binding`
+
+  With late binding, the cotntainer on startup checks for the requsite signatures during the applications `init()` stage.  
+  
+  In other words, the acutual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
+  
+  This mechanism is described in detail below
 
 #### Check Cosign Signature and Attestation at Runtime
 
