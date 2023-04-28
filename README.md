@@ -1539,6 +1539,7 @@ For example:
 
 * 5 builder _attaches_ all the signatures to the registry
   - [Sign offline and attach](https://github.com/salrashid123/cosign_bazel_cloud_build/blob/main/README.md#sign-offline-and-attach)
+  - Alternatively, the builder can provide the signatures as arguments to the TEE containers's startup
 
 * 6 On deployment, the startup init in step 3 will ensure all parties signed image before doing anything
 
@@ -1669,7 +1670,7 @@ The following checks were performed on each of these signatures:
 ### goreleaser
 
 The "Releases" section of this git repo uses my public gpg key to sign the artifacts using [goreleaser](https://goreleaser.com/) 
-the public key is (5D8EA7261718FE5728BA937C97341836616BF511)[https://keyserver.ubuntu.com/pks/lookup?search=5D8EA7261718FE5728BA937C97341836616BF511&fingerprint=on&op=index]
+the public key is [5D8EA7261718FE5728BA937C97341836616BF511](https://keyserver.ubuntu.com/pks/lookup?search=5D8EA7261718FE5728BA937C97341836616BF511&fingerprint=on&op=index)
 
 
 ```bash
