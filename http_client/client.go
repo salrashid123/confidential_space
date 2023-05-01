@@ -40,7 +40,8 @@ func main() {
 
 	caCert, err := ioutil.ReadFile(*ca_files)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error loading ca certificate %v\n", err)
+		os.Exit(1)
 	}
 
 	caCertPool := x509.NewCertPool()
@@ -48,7 +49,8 @@ func main() {
 
 	cert, err := tls.LoadX509KeyPair(*tls_crt, *tls_key)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error loading client keypair %v\n", err)
+		os.Exit(1)
 	}
 
 	tr := &http.Transport{
@@ -83,20 +85,23 @@ func main() {
 	}
 	body, err := json.Marshal(p)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error marshalling POST JSON %v\n", err)
+		os.Exit(1)
 	}
 
 	resp, err := client.Post(fmt.Sprintf("https://%s/", *host), "application/json", bytes.NewBuffer(body))
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error posting to TEE %v\n", err)
+		os.Exit(1)
 	}
 
 	htmlData, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error reading response body %v\n", err)
+		os.Exit(1)
 	}
 	defer resp.Body.Close()
-	fmt.Printf("Status: %v\n", resp.Status)
+	fmt.Printf("Status: %s\n", resp.Status)
 	fmt.Printf("Result: %s\n", string(htmlData))
 
 }

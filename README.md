@@ -61,7 +61,6 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Attestation Token and JWT Bearer token](#attestation-token-and-jwt-bearer-token)
   - [Authenticating with other Cloud Providers](#authenticating-with-other-cloud-providers)
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
-  - [Running locally](#running-locally)
   - [Client-Side Encryption](#client-side-encryption)
   - [Using BigQuery](#using-bigquery)
   - [Using BigQuery ML](#using-bigquery-ml)  
@@ -499,6 +498,7 @@ gcloud compute instances create vm1 --confidential-compute \
 
 
 ## B) Using mTLS with external IP
+##   important: see "Inbound Traffic" section below
 gcloud compute firewall-rules create allow-tee-inbound \
  --network teenetwork --action allow --direction INGRESS    --source-ranges 0.0.0.0/0     --target-tags tee-vm    --rules tcp:8081
 
@@ -549,8 +549,8 @@ go run main.go \
 cd http_client/
 go run client.go   \
    --host $EXTERNAL_IP:8081 \
-   --server_name=tee.collaborator1.com \   
-   --audience="//iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier" \ 
+   --server_name=tee.collaborator1.com \
+   --audience="//iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier" \
    --kmsKey="projects/$COLLABORATOR_1_PROJECT_ID/locations/global/keyRings/kr1/cryptoKeys/key1" \
    --user=alice \
    --ca_files=certs/root-ca-collaborator1.crt \
@@ -639,19 +639,6 @@ The `Launcher Spec` log line shown below
 ![image/launch_spec.png](images/launch_spec.png)
 
 Describes a go struct denoting the [startup metadata](https://cloud.google.com/compute/confidential-vm/docs/reference/cs-options#cs-metadata):
-
-```golang
-	ImageRef                   string
-	RestartPolicy              RestartPolicy
-	Cmd                        []string
-	Envs                       []EnvVar
-	AttestationServiceAddr     string
-	ImpersonateServiceAccounts []string
-	ProjectID                  string
-	Region                     string
-	Hardened                   bool
-	LogRedirect                bool
-```
 
 (basically the specifications/signals sent during startup of the container)
 
@@ -792,11 +779,17 @@ If the TEE attempts to access the STS or KMS endpoint for any collaborator who _
 
 #### Inbound Traffic
 
-At the time of writing (3/29/23), Confidential Space does *not* allow inbound traffic to the container (it can only establish outbound sockets like subscribing to a pubsubtopic).  
+At the time of writing (`4/29/23`), Confidential Space's default `STABLE` image does *not* allow inbound traffic.
 
-This will change in the future so the code in this repo contains an unused snippet demonstrating mTLS listening socket.
+To use inbound sockets now, you need to contact your google account manager to enable the allowlist to access the images below.  Once enabled for preview, specify the image set during vm creation.  Finally, the attestation JWT for experimental images sets `support_attributes` as `EXPERIMENTAL`  whcih means each collaborator would need to update their workload pool config accordingly.
 
-see section below
+
+```bash
+ --image-project=conf-space-images-preview
+ --image=confidential-space-preview-230400
+```
+
+also see section below
 
 #### mTLS using acquired Keys
 
@@ -820,14 +813,8 @@ The repo here contains a basic example of this techinque:  if the server TLS cer
 	// load the server certs issued by both ca1 and ca2, pretend these should use get loaded
 	// from each collaborators's secret manager or private ca using the attestation token (similar to the KMS decryption)
 	server1_cert, err := tls.LoadX509KeyPair(*collaborator1_tls_crt, *collaborator1_tls_key)
-	if err != nil {
-		panic(err)
-	}
 
 	server2_cert, err := tls.LoadX509KeyPair(*collaborator2_tls_crt, *collaborator2_tls_key)
-	if err != nil {
-		panic(err)
-	}
 ```
 
 Then the TEE will startup and enforce mTLS by specifing the exact client CA that should be honored based on the SNI and reject all other inbound traffic
@@ -863,6 +850,10 @@ Essentially, the client *must* present a client certificate issued exclusively t
 Altarnatively, the mtls connection can be used to in a 'multi-party' capability which different collaborators each holds their keysiare which is used together to create the TLS connection.  This idea is explored in the following repo:
 
 - [Multiparty Consent Based Networks (MCBN)](https://github.com/salrashid123/mcbn)
+
+You can also achive `TEE->TEE` traffic for a single trusted collaborator by using boot/init containers that acquire the mTLS certificates.  This is decribed in
+
+* [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
 
 Finally, you can also establish an mTLS connection where the private key resides in your KMS system.
 
@@ -972,71 +963,6 @@ The operator can get the NAT IP address by running:
 ```bash
 $ gcloud compute addresses describe natip --region=us-central1 --project $OPERATOR_PROJECT_ID
 address: 34.66.148.162
-```
-
-#### Running locally
-
-Testing locally isn't that easy end-to-end primarily because this demo is tuned to work in an actual deployed TEE...
-
-If you really want to run locally, create a service account in the project where you will run the operators' pubsub topic and subscription
-
-1. allow the svc account to read from pubsub scription
-2. allow the svc account to decrypt both collaborators kms keys
-
-```bash
-# switch to the operator (in reality, it can be any project)
-gcloud config configurations activate operator
-export OPERATOR_PROJECT_ID=`gcloud config get-value core/project`
-export OPERATOR_PROJECT_NUMBER=`gcloud projects describe $OPERATOR_PROJECT_ID --format='value(projectNumber)'`
-export GCLOUD_USER=`gcloud config get-value core/account`
-
-gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="user:$GCLOUD_USER" \
-     --role=roles/cloudkms.cryptoKeyEncrypterDecrypter
-
-gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_2_PROJECT_ID    \
-     --member="user:$GCLOUD_USER" \
-     --role=roles/cloudkms.cryptoKeyEncrypterDecrypter
-
-gcloud pubsub topics add-iam-policy-binding cs-topic \
-  --member="user:$GCLOUD_USER" \
-  --role=roles/pubsub.publisher 
-
-gcloud pubsub subscriptions add-iam-policy-binding cs-subscribe \
-  --member="user:$GCLOUD_USER" \
-  --role=roles/pubsub.subscriber 
-```
-
-then edit `app/main.go` and instead of reading in the workload federation audiences in from the pubsub message,  just use ADC
-
-i,e replace with
-
-```golang
-// kmsClient, err = kms.NewKeyManagementClient(ctx, option.WithCredentialsJSON([]byte(c1_adc)))
-kmsClient, err = kms.NewKeyManagementClient(ctx)
-```
-
-also 
-
-```golang
-const (
-	subscription = "cs-subscribe"
-	//jwksURL      = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
-	jwksURL = "https://www.googleapis.com/oauth2/v3/certs"
-)
-```
-
-then export any identity token signed by google 
-
-```bash
-echo -n `gcloud auth print-identity-token` > /tmp/attestation_verifier_claims_token
-```
-
-finally call your application:
-
-```bash
-go run . -config=`pwd`/config.json --attestation_token_path=/tmp/attestation_verifier_claims_token --project_id your_project_id
-# bazel run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :main -- --config=`pwd`/config.json --attestation_token_path=/tmp/attestation_verifier_claims_token --project_id your_project_id
 ```
 
 #### Client-side Encryption
@@ -1343,7 +1269,7 @@ For use with KMS, each participant would encrypt the binary form of the marshall
 
 #### Container image signing and verification
 
-Confidential Space has no built in capability for [Cryptographic Signing for Containers](https://aws.amazon.com/blogs/containers/cryptographic-signing-for-containers/) or any way to ensure that N parties provided their [signatures against the image](https://blog.sigstore.dev/cosign-image-signatures-77bab238a93/) itself.
+Confidential Space has no built in capability for [Cryptographic Signing for Containers](https://aws.amazon.com/blogs/containers/cryptographic-signing-for-containers/) or any way to ensure that N parties provided their [signatures against the image](https://blog.sigstore.dev/cosign-image-signatures-77bab238a93/) itself. As a side note, a container signature is actually the hash of json formatted file which includes the image manifests digest itself (see [this example](https://gist.github.com/salrashid123/4138d8b6ed5a89f5569e44eecbbb8fda))
 
 While each collaborator can ensure a specific image hash is exclusively authorized to access their KMS key, there is no direct mechanims that ensures the container was approved and authorized (i.,e signed) by outside parties.
 
@@ -1380,7 +1306,7 @@ There are several alternatives where the signature checks happen during runtime 
 
   With late binding, the cotntainer on startup checks for the requsite signatures during the applications `init()` stage.  
   
-  In other words, the acutual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
+  In other words, the acutual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system or simply read the signatures passed as startup arguments to the container runtime.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
   
   This mechanism is described in detail below
 
