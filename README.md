@@ -54,10 +54,11 @@ At the end of this exercise, each collaborator will encrypt some data with their
 * [Appendix](#appendix)
   - [Audit Logging](#audit-logging)
   - [Logging](#logging)
-  - [Inbound Traffic](#inbound-traffic)  
-  - [Reproducible Builds](#reproducible-builds)   
+  - [Inbound Traffic](#inbound-traffic)
+  - [Reproducible Builds](#reproducible-builds)
   - [VPC-SC](#vpc-sc)
   - [mTLS using acquired Keys](#mtls-using-acquired-keys)
+  - [Service Discovery and TEE-TEE traffic](#service-discovery-and-tee-tee-traffic)
   - [Attestation Token and JWT Bearer token](#attestation-token-and-jwt-bearer-token)
   - [Authenticating with other Cloud Providers](#authenticating-with-other-cloud-providers)
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
@@ -67,11 +68,11 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using CloudSQL](#using-cloudsql)
   - [Using SecretManager](#using-secretmanager)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
-  - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)  
+  - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)
   - [Using Hashicorp Vault](#using-hashicorp-vault)
   - [Service Discovery](#service-discovery)  
   - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)
-  - [Container image signing and verification](#container-image-signing-and-verification)      
+  - [Container image signing and verification](#container-image-signing-and-verification)
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
   - [Software Bill of Materials](#software-bill-of-materials)
   - [goreleaser](#goreleaser)
@@ -239,17 +240,18 @@ gcloud beta builds submit --config=cloudbuild_kaniko.yaml
 #    -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
 #    gcr.io/cloud-builders/bazel@sha256:f00a985c3196cc58819b6f7e8e40353273bc20e8f24b54d9c92d5279bb5b3fad  \
 #     --output_user_root=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
-
-
-### then tag and push...Note: the artifacts here will not include items generated through cosign...its just the image alone
-# docker tag us-central1-docker.pkg.dev/builder-project/repo1/tee:server us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
-# docker push us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
+#
+# skopeo inspect --format "{{.Name}}@{{.Digest}}"  docker-daemon:us-central1-docker.pkg.dev/builder-project/repo1/tee:server
+####   us-central1-docker.pkg.dev/builder-project/repo1/tee@sha256:f993166b9425a85496b8557d27d39fb1d75309a8f77225a511a20353d6a50d7d
 
 
 # pull the image.  you should see the exact same image hash
 docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
 docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server | jq -r '.[].RepoDigests[]'
 docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:7d670a791b38046fbda01e22b466ecd235d368a3fc5ae5aa6c05169c475d0d76
+
+# docker pull docker.io/salrashid123/tee:server
+# docker inspect docker.io/salrashid123/tee:server
 ```
 
 The cloud build step should give this specific container hash
@@ -672,7 +674,7 @@ There are several ways to do this
 Note, i've observed a build using bazel and kaniko produces the different hashes for the same code...not sure what the case is (implementation or have some small variation i didn't account for; likely the override stated below)...eitherway, i did see builds are self-consistent and reproducible using the same tool
 
 * Kaniko produces `tee@sha256:7d670a791b38046fbda01e22b466ecd235d368a3fc5ae5aa6c05169c475d0d76`
-* Bazel produces `tee@sha256:0c4218b0bd841b7844389cd17b2d57d681a18761d91c70b791be5581cc5dab93`
+* Bazel produces `tee@sha256:f993166b9425a85496b8557d27d39fb1d75309a8f77225a511a20353d6a50d7d`
 
 #### Bazel Overrides
 
@@ -864,6 +866,36 @@ For more information, see
 - [mTLS with Google Cloud KMS](https://blog.salrashid.dev/articles/2022/kms_mtls/)
 
 Much more commonly, a TEE will just unwrap an x509 or keypair directly within the TEE and use that as described earlier.
+
+#### Service Discovery and TEE-TEE traffic
+
+Networking between TEEs necessarily needs to be done over TLS or preferably mTLS using the one of the techniques outlined in the sections above.  
+
+Basically, the `TEE->TEE` traffic first needs one TEE to discovery the address resolution of another TEE peer.  Once thats done, the TLS connection needs to be such that they 'trust each other' (see mTLS section)
+
+There are many ways to establish service disovery of the TEE cluster/peers depending on the topoloy.  The service discovery system by itself can be hosted entirely by the operator in this case if the peer TLS is mutually trusted by bootstrapping after attestation.   In other words, even if the operator injects false TEE peer addresses, a client TEE cannot establish a TLS connection with the server since the server would not have bootstrapped mTLS credentials.
+
+Anyway, the various service discovery mechanisms
+
+* [DNS Based Service Directory with HTTP and TCP Internal Load Balancer](https://gist.github.com/salrashid123/93d899503d5799f10745a9fe7c89de87)
+
+  With this, the GCP Service Directory is used to specify the address of an internal load balancer for a group of TEE backends
+
+* [Proxyless gRPC with Google Traffic Director](https://github.com/salrashid123/grpc_xds_traffic_director)
+
+  With this, each gRPC client acquires peer addresses from Traffic Director
+
+* [Hashicorp Consul JWT Auth](https://github.com/salrashid123/consul_jwt_auth)
+
+  Uses an external service where each client 'registers' itself to consul by presenting it with an OIDC attestation token
+
+
+You can also ensure `TEE->TEE` traffic by running a proxy that acquires certificates first before delegating the request to the backend (see example below for envoy network proxy).  Alternatively, the target TEE would acqquire the certificates and exec the target service's native tls configuration (see example below for redis and postgres ) You can find an example of that here:
+
+* [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
+
+To ensure multiple parties consent to the tee->tee traffic, thats a lot harder and experimental (see prior section)
+
 
 #### Attestation Token and JWT Bearer token
 
@@ -1230,27 +1262,6 @@ also see
 
 - [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
 
-#### Service Discovery
-
-Networking between TEEs necessarily needs to be done over TLS or preferably mTLS using the one of the techniques outlined in the sections above.  
-
-Basically, the TEE->TEE traffic first needs one TEE to discovery the address resolution of another TEE peer.  Once thats done, the TLS connection needs to be such that they 'trust each other' (see mTLS section)
-
-There are many ways to establish service disovery of the TEE cluster/peers depending on the topoloy.  The service discovery system by itself can be hosted entirely by the operator in this case if the peer TLS is mutually trusted by bootstrapping after attestation.   In other words, even if the operator injects false TEE peer addresses, a client TEE cannot establish a TLS connection with the server since the server would not have bootstrapped mTLS credentials.
-
-Anyway, the various service discovery mechanisms
-
-* [DNS Based Service Directory with HTTP and TCP Internal Load Balancer](https://gist.github.com/salrashid123/93d899503d5799f10745a9fe7c89de87)
-
-  With this, the GCP Service Directory is used to specify the address of an internal load balancer for a group of TEE backends
-
-* [Proxyless gRPC with Google Traffic Director](https://github.com/salrashid123/grpc_xds_traffic_director)
-
-  With this, each gRPC client acquires peer addresses from Traffic Director
-
-* [Hashicorp Consul JWT Auth](https://github.com/salrashid123/consul_jwt_auth)
-
-  Uses an external service where each client 'registers' itself to consul by presenting it with an OIDC attestation token
 
 #### Threshold Encryption and Signatures
 
