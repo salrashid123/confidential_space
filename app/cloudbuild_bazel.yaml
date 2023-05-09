@@ -1,6 +1,5 @@
 steps:
 
-  # bazel 5.3.1
   - name: gcr.io/cloud-builders/bazel@sha256:f00a985c3196cc58819b6f7e8e40353273bc20e8f24b54d9c92d5279bb5b3fad
     id: build
     args: ['run', '--platforms=@io_bazel_rules_go//go/toolchain:linux_amd64', ':server']
@@ -13,7 +12,7 @@ steps:
     - |
       gcloud auth print-access-token > /workspace/token
 
-  - name: quay.io/containers/skopeo@sha256:282ec8da6e903232320f5ef8bb3bd88bf26872d569cfa79f5cb8faa5f0368a30
+  - name: quay.io/containers/skopeo@sha256:2f90e4c091a45cf0f92916642a97227531c4242ea18979b16359966ca358ec63
     id: push
     entrypoint: '/bin/bash'
     args:
