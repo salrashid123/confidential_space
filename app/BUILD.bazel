@@ -2,6 +2,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@io_bazel_rules_docker//go:image.bzl", "go_image")
 load("@io_bazel_rules_docker//container:container.bzl", "container_image")
 load("@bazel_gazelle//:def.bzl", "gazelle")
+load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 
 gazelle(name = "gazelle")
 
@@ -16,6 +17,22 @@ go_binary(
     goarch = "amd64",     
 )
 
+pkg_tar(
+    name = "certs_bundle",
+    srcs = [
+        "//certs:root-ca-operator.crt",
+        "//certs:tee-operator.crt",
+        "//certs:tee-operator.key",
+        "//certs:root-ca-collaborator1.crt",
+        "//certs:tee-collaborator1.crt",
+        "//certs:tee-collaborator1.key",
+        "//certs:root-ca-collaborator2.crt",
+        "//certs:tee-collaborator2.crt",
+        "//certs:tee-collaborator2.key",
+    ],
+    package_dir = "/certs",
+)
+
 container_image(
     name = "server",
     base = "@distroless_base//image",
@@ -28,16 +45,8 @@ container_image(
     files = [
         ":main",
         ":config.json",
-        "//certs:root-ca-operator.crt",
-        "//certs:tee-operator.crt",
-        "//certs:tee-operator.key",
-        "//certs:root-ca-collaborator1.crt",
-        "//certs:tee-collaborator1.crt",
-        "//certs:tee-collaborator1.key",
-        "//certs:root-ca-collaborator2.crt",
-        "//certs:tee-collaborator2.crt",
-        "//certs:tee-collaborator2.key",
     ],
+    tars = [":certs_bundle"],
     ports = ["8081"],
     repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee",
 )

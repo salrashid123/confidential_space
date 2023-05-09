@@ -42,18 +42,18 @@ var (
 	project_id             = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
 
 	// for mtls certificates
-	default_ca      = flag.String("default_ca", "root-ca-operator.crt", "Operator RootCA Chain (PEM)")
-	default_tls_crt = flag.String("default_tls_crt", "tee-operator.crt", "Operator TLS Certificate (PEM)")
-	default_tls_key = flag.String("default_tls_key", "tee-operator.key", "Operator TLS KEY (PEM)")
+	default_ca      = flag.String("default_ca", "certs/root-ca-operator.crt", "Operator RootCA Chain (PEM)")
+	default_tls_crt = flag.String("default_tls_crt", "certs/tee-operator.crt", "Operator TLS Certificate (PEM)")
+	default_tls_key = flag.String("default_tls_key", "certs/tee-operator.key", "Operator TLS KEY (PEM)")
 
 	// collaborator mtls certs and keys materialized within the TEE
-	collaborator1_ca      = flag.String("collaborator1_ca", "root-ca-collaborator1.crt", "Collaborator 1 RootCA Chain (PEM)")
-	collaborator1_tls_crt = flag.String("collaborator1_tls_crt", "tee-collaborator1.crt", "Collaborator 1 TLS Certificate (PEM)")
-	collaborator1_tls_key = flag.String("collaborator1_tls_key", "tee-collaborator1.key", "Collaborator 1 TLS KEY (PEM)")
+	collaborator1_ca      = flag.String("collaborator1_ca", "certs/root-ca-collaborator1.crt", "Collaborator 1 RootCA Chain (PEM)")
+	collaborator1_tls_crt = flag.String("collaborator1_tls_crt", "certs/tee-collaborator1.crt", "Collaborator 1 TLS Certificate (PEM)")
+	collaborator1_tls_key = flag.String("collaborator1_tls_key", "certs/tee-collaborator1.key", "Collaborator 1 TLS KEY (PEM)")
 
-	collaborator2_ca      = flag.String("collaborator2_ca", "root-ca-collaborator2.crt", "Collaborator 2 RootCA Chain (PEM)")
-	collaborator2_tls_crt = flag.String("collaborator2_tls_crt", "tee-collaborator2.crt", "Collaborator 2 TLS Certificate (PEM)")
-	collaborator2_tls_key = flag.String("collaborator2_tls_key", "tee-collaborator2.key", "Collaborator 2 TLS KEY (PEM)")
+	collaborator2_ca      = flag.String("collaborator2_ca", "certs/root-ca-collaborator2.crt", "Collaborator 2 RootCA Chain (PEM)")
+	collaborator2_tls_crt = flag.String("collaborator2_tls_crt", "certs/tee-collaborator2.crt", "Collaborator 2 TLS Certificate (PEM)")
+	collaborator2_tls_key = flag.String("collaborator2_tls_key", "certs/tee-collaborator2.key", "Collaborator 2 TLS KEY (PEM)")
 
 	// map to hold all the users currently found and the number of times
 	// they've been sent
