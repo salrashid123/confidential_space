@@ -75,7 +75,8 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Container image signing and verification](#container-image-signing-and-verification)
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
   - [Software Bill of Materials](#software-bill-of-materials)
-  - [goreleaser](#goreleaser)
+  - [CNCF Confidential Containers](#cncf-confidential-containers)
+  - [Azure Confidential Containers](#azure-confidential-containers)  
 
 ---
 
@@ -1664,34 +1665,12 @@ The following checks were performed on each of these signatures:
 }
 ```
 
-
-### goreleaser
-
-The "Releases" section of this git repo uses my public gpg key to sign the artifacts using [goreleaser](https://goreleaser.com/) 
-the public key is [5D8EA7261718FE5728BA937C97341836616BF511](https://keyserver.ubuntu.com/pks/lookup?search=5D8EA7261718FE5728BA937C97341836616BF511&fingerprint=on&op=index)
-
-
-```bash
-# export GPG_FINGERPRINT=5D8EA7261718FE5728BA937C97341836616BF511  # your gpg key will be different
-# goreleaser release --snapshot  --rm-dist
-## for github; gcr does not support artifacts like this afaik
-# git tag v1.0.0
-# git push origin --tags
-# goreleaser release --rm-dist
-
-gpg --recv-keys 5D8EA7261718FE5728BA937C97341836616BF511
-$ gpg --verify confidential_space*.spdx.sbom.sig confidential_space*.spdx.sbom 
-gpg: Signature made Sun 09 Apr 2023 10:42:42 AM EDT
-gpg:                using RSA key CCAA9841EB015FA2FE711C912B8BE9E5D93A1D94
-gpg: Good signature from "Salmaan Rashid <salrashid123@gmail.com>" [ultimate]
-```
-
 #### Local Kaniko build artifiact registry authentication
-
 
 The following config allows you to use local docker kaniko to push to container registry
 
 ```bash
+## acquired token is valid for 1 hour by default
 token=$(gcloud auth print-access-token)
 docker_token=$(echo -n "gclouddockertoken:$token" | base64 | tr -d "\n")
 
@@ -1713,4 +1692,73 @@ cat > ~/.docker/config_kaniko.json <<- EOM
   }
 }
 EOM
+
+## note the `config_kanklo.json file with the token is passed through to the container
+docker run    -v `pwd`:/workspace   -v $HOME/.docker/config_kaniko.json:/kaniko/.docker/config.json:ro  \
+             gcr.io/kaniko-project/executor@sha256:034f15e6fe235490e64a4173d02d0a41f61382450c314fffed9b8ca96dff66b2    \
+              --dockerfile=Dockerfile --reproducible \
+              --destination "us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server"     --context dir:///workspace/
 ```
+
+#### CNCF Confidential Containers
+
+CNCF's [confidential-containers](https://github.com/confidential-containers) project is a variation of Confidential Space.
+
+For example, the same concepts Confidential Container employs such as attestation, verification and key release shares similar methodologies.
+
+Necessarily, the operator of the infrastructure is critically de-privleged from the workload:
+
+(from [Understanding the Confidential Containers Attestation Flow](https://www.redhat.com/en/blog/understanding-confidential-containers-attestation-flow)):
+
+```
+In a typical Kubernetes context, the infrastructure provider (such as a public cloud provider) is not considered a threat agent. It is a trusted actor of a Kubernetes deployment.
+
+In a confidential computing context, that assumption no longer applies and the infrastructure provider is a potential threat agent. Confidential Computing in general, and Confidential Containers in particular, try to protect Kubernetes workload owners from the infrastructure provider. Any software component that belongs to the infrastructure (e.g. the Kubernetes control plane) is untrusted.
+```
+
+At face, basic 'level' where Confidential Containers currently operates at is receiving entitlements to pull, decrypt, verify and run a container image that is deemed sensitive.
+
+Confidential Space on the other hand, delegates the ability to pull and run an image back to the Operator but the decryption keys or sensitive key material is done *within* the container is only released after attestation.
+
+With Confidential Space, the attestation service and access control is provided by the Cloud Provider (eg. Google) and not the Operator of the kubernetes cluster (i.,e the owner of the kubernetes cluster or GCP project).
+
+With Confidential Containers, the agent that _begins_ the attestation process is on the Node.  For example, the k8s Node that intends to run a sensitive container image is bootstrapped by a privleged `kata-agent` which inturn provides attestation statements to an external service that releases the decryption keys back to the agent that enables it to pull and run the sensitive image.
+
+Basically, one operates at the ability pull secrets to start a workload container image while other operates after an image is started and acquires secrets via attestation.  Ofcourse Confidential Containers can be extended to surface attestation _into_ the container as well (see `Azure Confidential Containers` below)
+
+* [CNCF Confidential Containers Architecture](https://github.com/confidential-containers/documentation/blob/main/architecture.md)
+* [How to use Confidential Containers without confidential hardware](https://www.redhat.com/en/blog/how-use-confidential-containers-without-confidential-hardware)
+* [Kata Containers](https://katacontainers.io/)
+* [Container Image Encryption & Decryption in the CoCo project](https://medium.com/kata-containers/confidential-containers-and-encrypted-container-images-fc4cdb332dec)
+* [OCICrypt Container Image KMS Provider](https://github.com/salrashid123//ocicrypt-kms-keyprovider)
+
+In summary, the basic common objectives are the same but the mechanism and levels at which they operate are different
+
+#### Azure Confidential Containers
+
+[Azure Confidential containers](https://learn.microsoft.com/en-us/azure/confidential-computing/confidential-containers) implements a similar flow to Confidential Space.  It does not seem to be bound to simple enforcement gating the ability to _download_ an image but specifies capabilities to perform key release based on the full container specification and environment at runtime.
+
+It seems the general flow with Azure is to first define a security policy specification which would include the target runtime specification using the [Azure confcom CLI tool](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-tutorial-deploy-confidential-containers-cce-arm#create-an-aci-container-group-arm-template) utility.   Specifically i think using something like [confcom.security_policy.load_policy_from_image_name()](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/azext_confcom/security_policy.py#L664) (see [test_confcom_image.py](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/azext_confcom/tests/latest/test_confcom_image.py)). 
+
+from azure docs:
+
+```
+When a security policy gets injected into the ARM Template, the corresponding sha256 hash of the decoded security policy gets printed to the command line. This sha256 hash can be used for verifying the hostdata field of the SEV-SNP Attestation Report and/or used for key release policies using MAA (Microsoft Azure Attestation) or mHSM (managed Hardware Security Module)
+```
+
+Given the specification, a final policy hash is generated using and injected into the Azure deploymentTemplate for a [Container Group](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/samples/sample-template-output.json#L16)
+
+
+On deployment, the aggregate hash appears in an attestation statement from within the container provide by a sidecar services (see [Azure Attestation Token](https://learn.microsoft.com/en-us/azure/attestation/basic-concepts#attestation-token) (see [Attestation Token Examples](https://learn.microsoft.com/en-us/azure/attestation/attestation-token-examples) ),):
+
+```
+Confidential containers on Azure Container Instances provide a sidecar open source container for attestation and secure key release. This sidecar instantiates a web server, which exposes a REST API so that other containers can retrieve a hardware attestation report or a Microsoft Azure Attestation token via the POST method. The sidecar integrates with Azure Key vault for releasing a key to the container group after validation has been completed.
+```
+
+There are other capabilities of Azure:
+
+* [Attested TLS](https://github.com/microsoft/confidential-ai/blob/main/inference/README.md#client-setup)
+* [Confidential containers on Azure](https://learn.microsoft.com/en-us/azure/confidential-computing/confidential-containers)
+* [Confidential containers on Azure Container Instances](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-confidential-overview)
+* [Azure Container Instances Confidential Hello World](https://github.com/Azure-Samples/aci-confidential-hello-world)
+* [Microsoft.ContainerInstance containerGroups](https://learn.microsoft.com/en-us/azure/templates/microsoft.containerinstance/containergroups?pivots=deployment-language-arm-template)
