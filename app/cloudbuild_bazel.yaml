@@ -13,6 +13,11 @@ steps:
     - |
       gcloud auth print-access-token > /workspace/token
 
+  # - name: gcr.io/cloud-builders/bazel@sha256:f00a985c3196cc58819b6f7e8e40353273bc20e8f24b54d9c92d5279bb5b3fad
+  #   id: push
+  #   args: ['run', '--define=PROJECT_ID=$PROJECT_ID', '--platforms=@io_bazel_rules_go//go/toolchain:linux_amd64', ':push_image']
+  #   waitFor: ['build', 'token']
+
   # skopeo 1.11.2
   - name: quay.io/containers/skopeo@sha256:b6090d267840441647186a285549a5186d83f32f13b9b33bc77b89e30c52afb0
     id: push

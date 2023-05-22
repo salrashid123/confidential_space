@@ -1,6 +1,6 @@
 load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@io_bazel_rules_docker//go:image.bzl", "go_image")
-load("@io_bazel_rules_docker//container:container.bzl", "container_image")
+load("@io_bazel_rules_docker//container:container.bzl", "container_image", "container_push")
 load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
 
@@ -49,6 +49,15 @@ container_image(
     tars = [":certs_bundle"],
     ports = ["8081"],
     repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee",
+)
+
+container_push(
+   name = "push_image",
+   image = ":server",
+   format = "Docker",
+   registry = "us-central1-docker.pkg.dev",
+   repository = "$(PROJECT_ID)/repo1/tee",
+   tag = "server",
 )
 
 go_library(
