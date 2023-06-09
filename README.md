@@ -54,7 +54,6 @@ At the end of this exercise, each collaborator will encrypt some data with their
 * [Appendix](#appendix)
   - [Audit Logging](#audit-logging)
   - [Logging](#logging)
-  - [Inbound Traffic](#inbound-traffic)
   - [Reproducible Builds](#reproducible-builds)
   - [VPC-SC](#vpc-sc)
   - [mTLS using acquired Keys](#mtls-using-acquired-keys)
@@ -542,8 +541,7 @@ gcloud compute instances create vm1 --confidential-compute \
   --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f~tee-restart-policy=Never~tee-container-log-redirect=true
 
 
-## B) Using mTLS with external IP
-##   important: see "Inbound Traffic" section below
+### B) Using mTLS with external IP
 gcloud compute firewall-rules create allow-tee-inbound \
  --network teenetwork --action allow --direction INGRESS    --source-ranges 0.0.0.0/0     --target-tags tee-vm    --rules tcp:8081
 
@@ -822,19 +820,6 @@ If the TEE attempts to access the STS or KMS endpoint for any collaborator who _
 
 ![images/vpc-sc.png](images/vpc-sc.png)
 
-#### Inbound Traffic
-
-At the time of writing (`4/29/23`), Confidential Space's default `STABLE` image does *not* allow inbound traffic.
-
-To use inbound sockets now, you need to contact your google account manager to enable the allowlist to access the images below.  Once enabled for preview, specify the image set during vm creation.  Finally, the attestation JWT for experimental images sets `support_attributes` as `EXPERIMENTAL`  whcih means each collaborator would need to update their workload pool config accordingly.
-
-
-```bash
- --image-project=conf-space-images-preview
- --image=confidential-space-preview-230400
-```
-
-also see section below
 
 #### mTLS using acquired Keys
 
