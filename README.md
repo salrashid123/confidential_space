@@ -63,7 +63,8 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
   - [Client-Side Encryption](#client-side-encryption)
   - [Using BigQuery](#using-bigquery)
-  - [Using BigQuery ML](#using-bigquery-ml)  
+  - [Using BigQuery ML](#using-bigquery-ml)
+  - [Using BigQuery Differential Privacy](#using-bigquery-differential-privacy)      
   - [Using CloudSQL](#using-cloudsql)
   - [Using SecretManager](#using-secretmanager)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
@@ -1166,6 +1167,13 @@ b. TEE runs `ML.PREDICT()` given sensitive data that over an already trained mod
 
 For a contrived end-to-end example where a BQML model is generated with this technique, see [Bigquery ML over AEAD encrypted data](https://gist.github.com/salrashid123/12243b99771d22ed4d02a6f1094f624a)
 
+#### Using BigQuery Differential Privacy
+
+In another variation of using BQ and AEAD functions described in the immediately prior section, you can also apply other BQ functions on the dataset.
+
+Noteably, you can apply BQ `Differential Privacy` functions to encrypted data and have the output comply with the specifications of the function.
+
+For an actual example, see [BQ Differential Privacy using AEAD and GCP Confidential Space](https://gist.github.com/salrashid123/3d7bc17e2d3f096e68e1bd27e4baea5e)
 
 #### Using CloudSQL
 
