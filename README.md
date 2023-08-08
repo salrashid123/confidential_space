@@ -665,6 +665,12 @@ For the operator, you can enable vm logs for GCE
 
 >> Important: these GCE logs are *NOT* audit logs and just plain VM logs...these can be [created/faked](https://gist.github.com/salrashid123/714a5b67f254eba6954333be8bc03c0c) by a user with log writer access manually so do not use them for a verifiable source of truth
 
+Note that API calls you invoke to GCP services can also include arbitrary user-specified annotations.  For example, if the operator wants to call any collaborators KMS API operation, they can attach a 'request-reason' to each call which will show up in audit logs.
+
+For more information, see
+
+- [Request Annotation with Cloud Audit Logging and Monitoring on GCP](https://github.com/salrashid123/request_reason)
+
 ### Logging
 
 Logging to `stdout/stderr` is disabled for confidential space VMs.  Logging to stdout/stderr is only enabled with the debug image set but thats rarely used.
