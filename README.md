@@ -445,6 +445,22 @@ principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locati
 
 We could have configured the entire workload provider to mandate that any access to any resource must include that specific image has.  This demo, however, abstracts it to the resource (KMS key) binding.  This was done to allow more operational flexibility: if the image builder creates a new image hash, each collaborator can more easily replace the IAM binding on specific resources instead of redefining the entire providers constraints.
 
+Alternatively, if you wanted the top-level IAM binding to include the `image_hash` alone, the command would be something like
+
+```bash
+gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
+    --location="global"     --workload-identity-pool="trusted-workload-pool"   \
+      --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
+          --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
+             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts && 'assertion.submods.container.image_reference == us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f'"
+
+# this will allow all identities in the provider access to the key.
+#  since the provider includes the image_hash and project, its bound to the operator's environment
+gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/*"  \
+     --role=roles/cloudkms.cryptoKeyDecrypter
+```
+
 >> **important** Note that since this is just a demo, the HTTP or pubsub message any collaborator sends is blindly used by application to access the KMS key.  So if  `collaborator-3` somehow could submit messages to the topic or post data over mTLS using certs, the application would go through the process to acquire their kms key and decrypt.  In reality, what you should do is have code or configuration that stipulates only a predefined set of collaborators can participate (eg, instead of the pubsub message itself feeding in the `audience` and `kmskey`, you have that set in code, config or container start args so that collaborator 1 and 2 knows that only their data is in the sandbox).
 
 ### Collaborator 2
