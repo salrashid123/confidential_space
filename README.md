@@ -852,9 +852,11 @@ For outbound, a collaborator may choose to send an mTLS keypair to the TEE which
 
 There are several ways to achieve this where a pregenerated collaborator provided TLS CA and key pair is surfaced through a collaborator's own `Secret Manager` or using `GCP Private CA` to sign a CSR. (i.,e, instead of making KMS API calls back to a collaborators KMS syste, each collaborator unseals their secret or issues their own x509 within the TEE)
 
-You can find basic examples of seeding a generic key into secret manager or issuing a cert via private ca [here](https://gist.github.com/salrashid123/f06eacd80a25611a7c322d8e6f99942f)
+You can find basic examples of seeding a generic key into secret manager or issuing a cert via private ca [here](https://gist.github.com/salrashid123/f06eacd80a25611a7c322d8e6f99942f).
 
-For inbound traffic, its the same but you can use one listener port that enforces different collaborators mtls CAs.  In this mode, each collaborator seeds the TEE with its own CA for client certs and its own server certificates.
+One advantage of using PrivateCA (or any CA) is that the private key can be generated on the TEE which can use it to further create a CSR.   That CSR is what is used when calling [certificate.create{}](https://cloud.google.com/certificate-authority-service/docs/reference/rest/v1/projects.locations.caPools.certificates/create) call.
+
+For inbound traffic to the TEE, its the same flow as above but if your application is listening for connections from multiple collaborators (as in this repo), and if you want to enforce multple CA issued TLS certs, you can use one listener port that enforces different collaborators mtls CAs.  In this mode, each collaborator seeds the TEE with its own CA for client certs and its own server certificates.
 
 A client will connect to the common listner port and perform mTLS using a client cert issued by a specific collaborators CA.  The client can also validate the server certificate was issued by that CA.  You can find an example of that at
 
@@ -908,15 +910,6 @@ You can also achive `TEE->TEE` traffic for a single trusted collaborator by usin
 
 * [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
 
-Finally, you can also establish an mTLS connection where the private key resides in your KMS system.
-
-In this mode, you will issue a new KMS key and grant the Confidential Space VM access to that kMS key.
-
-For more information, see 
-
-- [mTLS with Google Cloud KMS](https://blog.salrashid.dev/articles/2022/kms_mtls/)
-
-Much more commonly, a TEE will just unwrap an x509 or keypair directly within the TEE and use that as described earlier.
 
 #### Service Discovery and TEE-TEE traffic
 
