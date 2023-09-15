@@ -70,7 +70,6 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)
   - [Using Hashicorp Vault](#using-hashicorp-vault)
-  - [Service Discovery](#service-discovery)  
   - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)
   - [Container image signing and verification](#container-image-signing-and-verification)
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
