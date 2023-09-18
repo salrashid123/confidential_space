@@ -75,7 +75,8 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
   - [Software Bill of Materials](#software-bill-of-materials)
   - [CNCF Confidential Containers](#cncf-confidential-containers)
-  - [Azure Confidential Containers](#azure-confidential-containers)  
+  - [Azure Confidential Containers](#azure-confidential-containers)
+  - [Terraform Template](#terraform-template)  
 
 ---
 
@@ -1769,3 +1770,10 @@ There are other capabilities of Azure:
 * [Confidential containers on Azure Container Instances](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-confidential-overview)
 * [Azure Container Instances Confidential Hello World](https://github.com/Azure-Samples/aci-confidential-hello-world)
 * [Microsoft.ContainerInstance containerGroups](https://learn.microsoft.com/en-us/azure/templates/microsoft.containerinstance/containergroups?pivots=deployment-language-arm-template)
+
+
+#### Terraform Template
+
+If you want to launch VMs using terraform, the following describes one simple sample:
+
+* [Terraform to create GCP Confidential Space VM](https://gist.github.com/salrashid123/a49a77ce4d52f4d0c228b20b08d5c2d6)
