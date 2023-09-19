@@ -938,6 +938,10 @@ You can also ensure `TEE->TEE` traffic by running a proxy that acquires certific
 
 * [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
 
+Here is an end-to-end example with consul and envoy:
+
+* [Service->Service mTLS using Envoy and Consul Service Discovery on GCP Confidential Space](https://github.com/salrashid123/cs_mesh)
+
 To ensure multiple parties consent to the tee->tee traffic, thats a lot harder and experimental (see prior section)
 
 
