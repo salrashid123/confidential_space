@@ -55,6 +55,7 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [Audit Logging](#audit-logging)
   - [Logging](#logging)
   - [Reproducible Builds](#reproducible-builds)
+  - [Credential Injection](#credential-injection)  
   - [VPC-SC](#vpc-sc)
   - [mTLS using acquired Keys](#mtls-using-acquired-keys)
   - [Service Discovery and TEE-TEE traffic](#service-discovery-and-tee-tee-traffic)
@@ -784,6 +785,19 @@ def go_repositories():
 
 If you upgrade any of these libraries, remember to run `gazelle` to regenerate the `repositories.bzl` and then replace the `build_directives` section on the new set.
 
+
+#### Credential Injection
+
+The default sample here uses KMS to decrypt secrets provided by each collaborator and then surface that to the application (in this repo, the application is just a simple 'work counter').
+
+The decrypted dtaa could be anything like credentials or TLS keys used by an arbitrary application.  For example, [mTLS using acquired Keys](#mtls-using-acquired-keys) shows how a TEE can first acquire TLS credentials for `TEE->TEE` traffic while [Service Discovery and TEE-TEE traffic](#service-discovery-and-tee-tee-traffic) shows how you can acquire a shared secret (i.e, the consul node encryption key)
+
+The common pattern in those two refernces describes a 'bootstrap' process which exchanges confidential space tokens for the decrypted tokens or access to secret manager.  
+
+This mechanims can to bootstrap and then launch N background custom or off-the-shelf applications (consul, postgres, spark, envoy) is generalized here though in this case generalization still requires a custom bootstrap image per background service:
+
+*  [Minimal key injection for GCP Confidential Space](misc/tee_bootstrap)
+
 #### VPC-SC
 
 You can also restrict KMS and Workload Federation (STS) API calls on each Collaborator by the collaborator:
@@ -902,9 +916,9 @@ Then the TEE will startup and enforce mTLS by specifing the exact client CA that
 
 Essentially, the client *must* present a client certificate issued exclusively the CA and client certificates associated with their collaborator.
 
-Altarnatively, the mtls connection can be used to in a 'multi-party' capability which different collaborators each holds their keysiare which is used together to create the TLS connection.  This idea is explored in the following repo:
+Altarnatively, the mtls connection can be used to in a 'multi-party' capability which different collaborators each holds their keysiare which is used together to create the TLS connection.  This idea is explored in the following repo where you could "recombine" a TLS certificate inside confidential space using all the key shares.   The idea is that you create an TLS connection to confidential space and instead of trusting the CA issuer and certificate necessarily, you trust the public key which will be the same everywhere.  Ofcourse each collaborator would need a way to the public certificate value prior to trust (which can be done during key generation and distribution which itself can be done within confidential space)
 
-- [Multiparty Consent Based Networks (MCBN)](https://github.com/salrashid123/mcbn)
+- [Multiparty Consent Based Networks (MCBN)](https://github.com/salrashid123/mcbn#deterministic-rsa-key)
 
 You can also achive `TEE->TEE` traffic for a single trusted collaborator by using boot/init containers that acquire the mTLS certificates.  This is decribed in
 
