@@ -1,0 +1,17 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+load("@bazel_gazelle//:def.bzl", "gazelle")
+
+gazelle(name = "gazelle")
+
+go_library(
+    name = "com_github_salrashid123_confidential_space_claims",
+    srcs = [
+        "claims.go",
+    ],
+    importpath = "github.com/salrashid123/confidential_space/claims",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_golang_jwt_jwt_v5//:go_default_library",
+    ],
+)
+
