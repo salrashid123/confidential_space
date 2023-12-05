@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -115,38 +114,6 @@ func NewEKMAZCredentials(options *EKMAZCredentialOptions) (*EKMAZCredential, err
 	}, nil
 }
 
-type customToken struct {
-	Audience string   `json:"audience"`
-	Nonces   []string `json:"nonces"` // each nonce must be min 64bits
-}
-
-func (s *EKMAZCredential) getCustomAttestation(tokenRequest customToken) (string, error) {
-	httpClient := http.Client{
-		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return net.Dial("unix", s.copts.AttestationTokenPath)
-			},
-		},
-	}
-
-	customJSON, err := json.Marshal(tokenRequest)
-	if err != nil {
-		return "", err
-	}
-
-	url := "http://localhost/v1/token"
-	resp, err := httpClient.Post(url, "application/json", strings.NewReader(string(customJSON)))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	tokenbytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return string(tokenbytes), nil
-}
-
 func (c *EKMAZCredential) GetToken(ctx context.Context, opts policy.TokenRequestOptions) (azcore.AccessToken, error) {
 
 	if len(opts.Scopes) != 1 {
@@ -208,8 +175,9 @@ func (c *EKMAZCredential) GetToken(ctx context.Context, opts policy.TokenRequest
 	// also embed the ekm value.
 	//  by convention, i'm setting eat_nonce[0]=ekm and eat_nonce[1]=sha256(tokenString)
 	tts := &tk.CustomToken{
-		Audience: c.copts.Audience,
-		Nonces:   []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		Audience:  c.copts.Audience,
+		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		TokenType: tk.TOKEN_TYPE_OIDC,
 	}
 
 	// now get the token using the fake testprovider

@@ -194,8 +194,9 @@ func (s *EKMProvider) Retrieve() (creds.Value, error) {
 	// also embed the ekm value.
 	//  by convention, i'm setting eat_nonce[0]=ekm and eat_nonce[1]=sha256(tokenString)
 	tts := &tk.CustomToken{
-		Audience: s.cfg.Audience,
-		Nonces:   []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		Audience:  s.cfg.Audience,
+		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		TokenType: tk.TOKEN_TYPE_OIDC,
 	}
 
 	// now get the token using the fake testprovider
