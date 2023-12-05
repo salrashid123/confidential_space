@@ -3,22 +3,30 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "io_bazel_rules_go",
-    sha256 = "dd926a88a564a9246713a9c00b35315f54cbd46b31a26d5d8fb264c07045f05d",
+    sha256 = "91585017debb61982f7054c9688857a2ad1fd823fc3f9cb05048b0025c47d023",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.38.1/rules_go-v0.38.1.zip",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.38.1/rules_go-v0.38.1.zip",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.42.0/rules_go-v0.42.0.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.42.0/rules_go-v0.42.0.zip",
     ],
 )
 
 http_archive(
     name = "bazel_gazelle",
-    sha256 = "ecba0f04f96b4960a5b250c8e8eeec42281035970aa8852dda73098274d14a1d",
+    sha256 = "d3fa66a39028e97d76f9e2db8f1b0c11c099e8e01bf363a923074784e451f809",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.29.0/bazel-gazelle-v0.29.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.29.0/bazel-gazelle-v0.29.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.33.0/bazel-gazelle-v0.33.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.33.0/bazel-gazelle-v0.33.0.tar.gz",
     ],
 )
 
+http_archive(
+    name = "googleapis",
+    sha256 = "9cc324d40919f8e393a23602252ccaf43d7a7d202f114ed835e674fca87c293d",
+    strip_prefix = "googleapis-4eccaaf48c0ccadc6f98707d3dbe9614d47bb103",
+    urls = [
+        "https://github.com/googleapis/googleapis/archive/4eccaaf48c0ccadc6f98707d3dbe9614d47bb103.zip",
+    ],
+)
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
@@ -35,22 +43,30 @@ go_register_toolchains(version = "1.19.1")
 gazelle_dependencies()
 
 
+# ==================================
 
-# protobuf
-
-http_archive(
-    name = "com_google_protobuf",
-    sha256 = "6a31b662deaeb0ac35e6287bda2f3369b19836e6c9f8828d4da444346f420298",
-    strip_prefix = "protobuf-21.12",
-    urls = ["https://github.com/protocolbuffers/protobuf/archive/v21.12.zip"],
+load("@googleapis//:repository_rules.bzl", "switched_rules_by_language")
+switched_rules_by_language(
+    name = "com_google_googleapis_imports",
 )
 
-load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
+# ==================================
 
-protobuf_deps()
+# rules pkg
+http_archive(
+    name = "rules_pkg",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_pkg/releases/download/0.9.1/rules_pkg-0.9.1.tar.gz",
+        "https://github.com/bazelbuild/rules_pkg/releases/download/0.9.1/rules_pkg-0.9.1.tar.gz",
+    ],
+    sha256 = "8f9ee2dc10c1ae514ee599a8b42ed99fa262b757058f65ad3c384289ff70c4b8",
+)
+load("@rules_pkg//:deps.bzl", "rules_pkg_dependencies")
+rules_pkg_dependencies()
 
+# ==================================
 
-# Docker
+# rules_docker
 
 http_archive(
     name = "io_bazel_rules_docker",

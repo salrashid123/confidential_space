@@ -19,23 +19,31 @@ steps:
         echo -n '{ "projectid": "$PROJECT_ID", "buildid": "$BUILD_ID", "foo":"bar", "commitsha": "$COMMIT_SHA"}' > /workspace/predicates.json
     waitFor: ['build']
     
+  - name: gcr.io/cloud-builders/gcloud-slim@sha256:e72dd707225c740a2345cf09037bcb1239df8ebb1e714d0d8fdf81efdb02b14c
+    id: get_kms_key
+    entrypoint: '/bin/bash'
+    args:      
+    - '-c'
+    - |
+      gcloud kms keys versions get-public-key 1 --key key1 --keyring cosignkr --location global | openssl base64 -nopad -A  | sed 's/[=]*$//' > /workspace/kms_pub.txt
+    waitFor: ['build']
 
-  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
     id: sign_kms
     entrypoint: 'sh'
     args:      
     - '-c'
     - |
-      cosign sign --annotations=key1=value1 --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
-    waitFor: ['build']
+      cosign sign --annotations=key1=value1 --tlog-upload=false -a dev.cosignproject.cosign/sigalg=ECDSA_P256_SHA256 -a dev.cosignproject.cosign/pub=$(cat /workspace/kms_pub.txt) --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
+    waitFor: ['get_kms_key']
 
-  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
     id: attest_kms
     entrypoint: 'sh'
     args:      
     - '-c'
     - |
-      cosign attest --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/predicates.json -y $(cat /workspace/name_hash.txt)
+      cosign attest --tlog-upload=false --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/predicates.json -y $(cat /workspace/name_hash.txt)
     waitFor: ['build','sign_kms']
 
   - name: docker.io/anchore/syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b
@@ -47,16 +55,16 @@ steps:
       /syft packages  -o cyclonedx-json --file=/workspace/packages.json $(/busybox/cat /workspace/name_hash.txt)
     waitFor: ['build','sign_kms']
 
-  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
     id: attest_packages_kms
     entrypoint: 'sh'
     args:      
     - '-c'
     - |
-      cosign attest --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y $(cat /workspace/name_hash.txt)
+      cosign attest  --tlog-upload=false --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y $(cat /workspace/name_hash.txt)
     waitFor: ['generate_packages_attestation']    
 
-  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  # - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
   #   id: sign_oidc
   #   env:
   #   - REGISTRY=us-central1-docker.pkg.dev
@@ -67,10 +75,10 @@ steps:
   #   args:      
   #   - '-c'
   #   - |
-  #     cosign sign --annotations=key1=value1 -f -y $(cat /workspace/name_hash.txt)
+  #     cosign sign --annotations=key1=value1  --tlog-upload=false -a dev.cosignproject.cosign/sigalg=ECDSA_P256_SHA256 -a dev.cosignproject.cosign/pub=$(cat /workspace/kms_pub.txt) -f -y $(cat /workspace/name_hash.txt)
   #   waitFor: ['attestations']
 
-  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  # - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
   #   id: attest_oidc
   #   env:
   #   - REGISTRY=us-central1-docker.pkg.dev
@@ -81,10 +89,10 @@ steps:
   #   args:      
   #   - '-c'
   #   - |
-  #     cosign attest -f --predicate=/workspace/predicates.json -y  $(cat /workspace/name_hash.txt)
+  #     cosign attest -f  --tlog-upload=false --predicate=/workspace/predicates.json -y  $(cat /workspace/name_hash.txt)
   #   waitFor: ['sign_oidc']    
 
-  # - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  # - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
   #   id: attest_packages_oidc
   #   env:
   #   - REGISTRY=us-central1-docker.pkg.dev
@@ -95,7 +103,7 @@ steps:
   #   args:      
   #   - '-c'
   #   - |
-  #     cosign attest -f --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y  $(cat /workspace/name_hash.txt)
+  #     cosign attest -f  --tlog-upload=false --predicate=/workspace/packages.json --type="https://cyclonedx.org/bom/v1.4" -y  $(cat /workspace/name_hash.txt)
   #   waitFor: ['generate_packages_attestation']    
 
 
@@ -109,7 +117,7 @@ steps:
       /syft packages $(/busybox/cat /workspace/name_hash.txt) -o=spdx --file=/workspace/latest.spdx
     waitFor: ['build']
 
-  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
     id: attach_sbom
     entrypoint: 'sh'
     args:      
@@ -118,13 +126,13 @@ steps:
       cosign attach sbom --sbom=/workspace/latest.spdx $(cat /workspace/name_hash.txt)
     waitFor: ['generate_sbom']
 
-  - name: gcr.io/projectsigstore/cosign@sha256:ac8e08a2141e093f4fd7d1d0b05448804eb3771b66574b13ad73e31b460af64d
+  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
     id: sign_sbom 
     entrypoint: 'sh'
     args:      
     - '-c'
     - |
-      cosign sign --annotations=commit_sha=$COMMIT_SHA --attachment=sbom --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
+      cosign sign  --tlog-upload=false --annotations=commit_sha=$COMMIT_SHA --attachment=sbom --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
     waitFor: ['attach_sbom']
 
 

@@ -1,0 +1,18 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+load("@bazel_gazelle//:def.bzl", "gazelle")
+
+gazelle(name = "gazelle")
+
+go_library(
+    name = "go_default_library",
+    importpath = "github.com/salrashid123/confidential_space/misc/testtoken",
+    srcs = [
+        "token.go",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_golang_jwt_jwt_v5//:go_default_library",
+        "@com_github_lestrrat_go_jwx//jwk:go_default_library",
+        "@com_github_salrashid123_confidential_space_claims//:go_default_library",
+    ],
+)

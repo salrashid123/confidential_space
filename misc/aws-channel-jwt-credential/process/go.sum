@@ -1,0 +1,6 @@
+github.com/golang-jwt/jwt/v5 v5.0.0 h1:1n1XNM9hk7O9mnQoNBGolZvzebBQ7p93ULHRc28XJUE=
+github.com/golang-jwt/jwt/v5 v5.0.0/go.mod h1:pqrtFR0X4osieyHYxtmOUWsAWrfe1Q5UVIyoH402zdk=
+github.com/google/uuid v1.3.1 h1:KjJaJ9iWZ3jOFZIf1Lqf4laDRCasjl0BCmnEGxkdLb4=
+github.com/google/uuid v1.3.1/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/salrashid123/confidential_space/claims v0.0.0-20231103025304-cca1c2218a63 h1:OzVtQIX6OK0jdH9zrOMx4avXZYI3088sc7/BWn/vyMw=
+github.com/salrashid123/confidential_space/claims v0.0.0-20231103025304-cca1c2218a63/go.mod h1:wwJcadmRtnsVh5E0i7xB2RYfeVnYikY0JNv0y52YWiQ=

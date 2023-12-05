@@ -1,0 +1,8 @@
+[default]
+credential_process = /aws-channel-jwt-process-credential   --host=34.135.98.220:8081 --endpoint=https://server.domain.com:8081/token --audience=https://server.domain.com --audience=https://server.domain.com --sts-sni=server.domain.com --trust-ca=/certs/tls-ca-chain.pem --use-mtls=true   --cert=/certs/client-svc.crt --key=/certs/client-svc.key  
+
+[profile sessiontoken]
+credential_process = /aws-channel-jwt-process-credential    --host=34.135.98.220:8081 --endpoint=https://server.domain.com:8081/token --audience=https://server.domain.com --audience=https://server.domain.com --sts-sni=server.domain.com --trust-ca=/certs/tls-ca-chain.pem --use-mtls=true   --cert=/certs/client-svc.crt --key=/certs/client-svc.key  
+
+[profile assumerole]
+credential_process = /aws-channel-jwt-process-credential   --use-assume-role=true  --aws-arn="arn:aws:iam::291738886548:role/gcpsts"  --host=34.135.98.220:8081 --endpoint=https://server.domain.com:8081/token --audience=https://server.domain.com -sts-sni=server.domain.com --trust-ca=/certs/tls-ca-chain.pem --use-mtls=true   --cert=/certs/client-svc.crt --key=/certs/client-svc.key 

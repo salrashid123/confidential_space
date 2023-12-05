@@ -1,0 +1,151 @@
+node:
+  cluster: service_greeter
+  id: test-id
+
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    filter_chains:
+    - filters:     
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager      
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: service_httpbin }
+          http_filters:
+          - name: envoy.filters.http.jwt_authn
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+              providers:          
+                conf-space-jwt:
+                  issuer: https://idp-on-cloud-run-3kdezruzua-uc.a.run.app
+                  audiences:
+                  - "https://some_audience"
+                  payload_in_metadata: "jwt_payload"
+                  claim_to_headers:
+                  - header_name: x-jwt-claim-sub
+                    claim_name: sub
+                  - header_name: x-jwt-claim-image_digest
+                    claim_name: submods.container.image_digest
+                  remote_jwks:
+                    http_uri:
+                      uri: https://idp-on-cloud-run-3kdezruzua-uc.a.run.app/certs
+                      cluster: jwt.raw.confspace|443
+                      timeout: 5s
+                  from_headers:
+                  - name: Authorization
+                    value_prefix: "Bearer "
+              rules:
+              - match:
+                  prefix: "/get"
+                requires:
+                  provider_name: "conf-space-jwt"
+          - name: envoy.filters.http.lua
+            typed_config:   
+              '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+              inlineCode: |
+
+                local function has_value (tab, val)
+                    for index, value in ipairs(tab) do
+                        if value == val then
+                            return true
+                        end
+                    end
+                    return false
+                end
+
+                function envoy_on_request(request_handle)
+
+                  local stream = request_handle:streamInfo()
+                  local headers = request_handle:headers()  
+                  local meta = stream:dynamicMetadata():get("envoy.filters.http.jwt_authn")["jwt_payload"]
+
+                  if meta.submods == nil or meta.submods.container == nil or meta.submods.confidential_space == nil or meta.submods.gce == nil  then
+                    request_handle:respond({[":status"] = "403"},"incomplete attestation token")
+                  end
+
+                  local image_digest = meta.submods.container.image_digest
+                  local hwmodel = meta.hwmodel
+                  local support_attributes = meta.submods.confidential_space.support_attributes
+                  local project_id = meta.submods.gce.project_id
+
+                  if image_digest == nil or image_digest ~= "sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f" then
+                    request_handle:respond({[":status"] = "403"},"invalid image_hash")
+                  end
+
+                  if image_digest == nil or hwmodel ~= "GCP_AMD_SEV" then
+                    request_handle:respond({[":status"] = "403"},"invalid hwmodel")
+                  end
+
+                  if project_id == nil or project_id ~= "vegas-codelab-5" then
+                    request_handle:respond({[":status"] = "403"},"invalid project_id")
+                  end
+
+                  if has_value(support_attributes,"STABLE") then
+                    request_handle:logInfo("support_attributes: STABLE")
+                  else
+                    request_handle:respond({[":status"] = "403"},"invalid support_attribute")
+                  end
+
+                end                                 
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router     
+      transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+            require_client_certificate: true
+            common_tls_context:
+              tls_certificates:
+              - certificate_chain:
+                  filename: certs/http-server.crt
+                private_key:
+                  filename: certs/http-server.key
+  clusters:
+  - name: service_httpbin
+    connect_timeout: 2s
+    type: LOGICAL_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: service_httpbin
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: httpbin.org
+                port_value: 443
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+  - name: jwt.raw.confspace|443
+    type: LOGICAL_DNS
+    dns_lookup_family: V4_ONLY
+    connect_timeout: 2s
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: jwt.raw.confspace|443
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: idp-on-cloud-run-3kdezruzua-uc.a.run.app
+                port_value: 443
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext

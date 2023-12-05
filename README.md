@@ -34,7 +34,11 @@ Cast of characters:
   - The collaborator also defines their own workload identity pools  which authorizes OIDC tokens/attestations from a specific operator in a specific project and which asserts Confidential Space claims.
   - Collaborator grants access to their KMS key to the application within the TEE once it presents an attestation token issued to the TEE and which identifies a specific image hash in a Confidential Space environment.
 
-At the end of this exercise, each collaborator will encrypt some data with their KMS key, submit that data to a pubsub topic which the TEEs subscribe to.  Once a TEE receives a message, it will use the corresponding collaborators KMS key to decrypt their data.   This sample application doesn't do anything with the decrypted data:  it just keeps a counter of how many times a unique string was sent by any collaborator (i.e., just counts words).
+At the end of this exercise, each collaborator will encrypt some data with their KMS key, submit that data to a pubsub topic or emit to an mTLS HTTPS endpoint on the TEE.  Once a TEE receives a message, it will use the corresponding collaborators KMS key to decrypt their data.  This sample application doesn't do anything with the decrypted data:  it just keeps a counter of how many times a unique string was sent by any collaborator (i.e., just counts words).
+
+If using HTTPS, this demo utilizes mTLS certs and authorizes the TLS connection using [Channel Binding](https://datatracker.ietf.org/doc/rfc9266/) using `Exported Keying Material (EKM)`.  Which just means Before the TEE service calls the actual endpoint on the TEE to increment the wordcount (`/increment`), the client connecting to the TEE first verifies (using `/connect` endpoint) that the TLS connection is infact associated with the TEE alone by inspecting a returned Bearer token JWT containing the unique connections EKM nonce.
+
+Finally, this demo also creates an RSA keypair and certificate unique to each TEE and then provides "certification" that a given certificate and key was generated inside that TEE.  The TEE can then sign data inside the TEE and a remote user can verify that act by using the attestation_jwt and public key.
 
 ![images/conf_space.png](images/conf_space.png)
 
@@ -52,6 +56,9 @@ At the end of this exercise, each collaborator will encrypt some data with their
 * [Deploy](#deploy)
 * [Test](#test)
 * [Appendix](#appendix)
+  - [Attestation Token Custom Audience and Nonce](#attestation-token-custom-audience-and-nonce)
+    - [Default Attestation Token](#default-attestation-token)
+    - [Custom Attestation Token](#custom-attestation-token)
   - [Audit Logging](#audit-logging)
   - [Logging](#logging)
   - [Reproducible Builds](#reproducible-builds)
@@ -59,25 +66,30 @@ At the end of this exercise, each collaborator will encrypt some data with their
   - [VPC-SC](#vpc-sc)
   - [mTLS using acquired Keys](#mtls-using-acquired-keys)
   - [Service Discovery and TEE-TEE traffic](#service-discovery-and-tee-tee-traffic)
-  - [Attestation Token and JWT Bearer token](#attestation-token-and-jwt-bearer-token)
+  - [Using Exported Key Material (EKM) TLS Attestation](#using-exported-key-material-ekm-tls-attestation)
   - [Authenticating with other Cloud Providers](#authenticating-with-other-cloud-providers)
+      - [AWS Credentials for Confidential Space](#aws-credentials-for-confidential-space)
+      - [Azure Credentials for Confidential Space](#azure-credentials-for-confidential-space) 
   - [Outbound traffic via NAT](#outbound-traffic-via-nat)
   - [Client-Side Encryption](#client-side-encryption)
   - [Using BigQuery](#using-bigquery)
   - [Using BigQuery ML](#using-bigquery-ml)
   - [Using BigQuery Differential Privacy](#using-bigquery-differential-privacy)      
-  - [Using CloudSQL](#using-cloudsql)
   - [Using SecretManager](#using-secretmanager)
   - [Using WebAssembly to run Sensitive Container Code](#using-webassembly-to-run-sensitive-container-code)
   - [Running Sensitive Machine Learning Code](#running-sensitive-machine-learning-code)
-  - [Using Hashicorp Vault](#using-hashicorp-vault)
-  - [Threshold Encryption and Signatures](#threshold-encryption-and-signatures)
   - [Container image signing and verification](#container-image-signing-and-verification)
-  - [Check Cosign Signature and Attestation at Runtime](#check-cosign-signature-and-attestation-at-runtime)
-  - [Software Bill of Materials](#software-bill-of-materials)
-  - [CNCF Confidential Containers](#cncf-confidential-containers)
-  - [Azure Confidential Containers](#azure-confidential-containers)
   - [Terraform Template](#terraform-template)  
+  - [Minimal bootstrap credentials for for GCP Confidential Space](misc/tee_bootstrap)
+  - [Bazel Overrides](misc/bazel_overrides)
+  - [Manual Container image signing and verification](misc/container_signing)
+  - [Threshold Encryption and Signatures](misc/threshold_encryption_and_signatures)
+  - [Hashicorp Vault](misc/hashicorp_vault)
+  - [CNCF Confidential Containers](misc/cncf_containers)
+  - [Azure Confidential Containers](misc/azure_containers)
+  - [Access GCP and workspace APIs using GCP Workload Identity Federation](misc/google_workspace)
+  - [Build from Kaniko and gcloud](misc/kaniko_build)
+  - [Confidential Space Attestation JWT validation with Envoy](misc/envoy_cs)
 
 ---
 
@@ -120,7 +132,7 @@ gcloud config configurations create collaborator-2
 gcloud config set account admin@collaborator2-domain.com
 gcloud config set project YOUR_COLLABORATOR_2_PROJECT
 
-gcloud config configurations activate collaborator-1
+gcloud config configurations activate collaborator-2
 export COLLABORATOR_2_PROJECT_ID=`gcloud config get-value core/project`
 export COLLABORATOR_2_PROJECT_NUMBER=`gcloud projects describe $COLLABORATOR_2_PROJECT_ID --format='value(projectNumber)'`
 
@@ -136,13 +148,13 @@ It is critical that each collaborator trusts the code that is built does what it
 
 One option to do this is if each collaborator can view the code that will ultimately get deployed into the TEE.  The code and container there adheres to specific constraints to _not_do the bad stuff cited above.  What each code does to meet those standards is out of the scope for this article.  What we will show here is how a given code will create the same container hash value (i.,e you know the code you trust is running in a given container)
 
-The technique used in this example uses `kaniko` (default) or `bazel` to create reproducible container images.  By that, I mean for the same code base, these will generate an image with _the same image hash value_ no matter where it's built.  Using this capability, a collaborator can clone the source, generate a build and then inspect the resulting image hash value.  The collaborators can then authorize that image hash access to their KMS key.
+The technique used in this example uses `bazel` (default) or `kaniko` to create reproducible container images.  By that, I mean for the same code base, these will generate an image with _the same image hash value_ no matter where it's built.  Using this capability, a collaborator can clone the source, generate a build and then inspect the resulting image hash value.  The collaborators can then authorize that image hash access to their KMS key.
 
 You don't _have to_ use `bazel` or `kaniko` to build an image (you can just use the `Dockerfile` provided in this example).  However, if you don't use those, you'll get a different image hash though. 
 
-In this example using `kaniko`, the code will always produce a hash of  (see [reproducible Builds](#reproducible-builds))
+In this example using `bazel`, the code will always produce a hash of  (see [reproducible Builds](#reproducible-builds))
 
-* `tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f`
+* `tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01`
 
 For more info, see
 
@@ -223,6 +235,27 @@ gsutil iam ch \
   serviceAccount:cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com:objectAdmin \
   gs://$BUILDER_PROJECT_ID\_cloudbuild
 
+
+### for Bazel
+# gcloud builds submit --config=cloudbuild_bazel.yaml
+
+## for local Bazel
+### generate bazel dependencies
+# docker run   -e USER="$(id -u)" \
+#    -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output \
+#     -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
+#     gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a \
+#      --output_user_root=/tmp/build_output   run :gazelle -- update-repos -from_file=go.mod -prune=true -to_macro=repositories.bzl%go_repositories
+
+# # build
+# docker run   -e USER="$(id -u)" \
+#    -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output \
+#     -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
+#     gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a \
+#      --output_user_root=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
+
+# skopeo inspect --format "{{.Name}}@{{.Digest}}"  docker-daemon:us-central1-docker.pkg.dev/builder-project/repo1/tee:server
+
 ### for Kaniko
 
 # with local docker
@@ -237,7 +270,7 @@ gsutil iam ch \
 # cd /app
 # gcloud beta builds submit --config=cloudbuild_kaniko.yaml
 
-# to build via commit for kaniko
+# to build via commit
 gcloud source repos create cosign-repo
 
 gcloud projects add-iam-policy-binding $BUILDER_PROJECT_ID \
@@ -250,57 +283,31 @@ cp -R ../app/* .
 
 git add -A
 git commit -m "add"
-git push 
+git push  -o nokeycheck
 
-# create a manual trigger
-gcloud beta builds triggers create manual --region=global \
-   --name=cosign-trigger --build-config=cloudbuild_kaniko.yaml \
+# create a manual trigger using bazel or kaniko build yaml (default bazel)
+gcloud builds triggers create manual --region=global \
+   --name=cosign-trigger --build-config=cloudbuild_bazel.yaml \
    --repo=https://source.developers.google.com/p/$BUILDER_PROJECT_ID/r/cosign-repo \
    --repo-type=CLOUD_SOURCE_REPOSITORIES --branch=main \
    --service-account=projects/$BUILDER_PROJECT_ID/serviceAccounts/cosign@$BUILDER_PROJECT_ID.iam.gserviceaccount.com 
 
 # now trigger
-gcloud beta builds triggers run cosign-trigger --branch=main
+gcloud builds triggers run cosign-trigger --branch=main
 
 # skopeo inspect --format "{{.Name}}@{{.Digest}}"  docker://us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
 
-### for Bazel
-# gcloud beta builds submit --config=cloudbuild_bazel.yaml
-
-## for local Bazel
-## if you want to modify the code, use bazel to regenerate the dependencies
-# to acquire bazel go dependency references
-# bazel version 5.3.1
-
-# bazel run :gazelle -- update-repos -from_file=go.mod -prune=true -to_macro=repositories.bzl%go_repositories
-
-# to build image locally with bazel
-#    repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee"
-# bazel build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
-# bazel run --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
-
-# or build with docker with bazel image itself (preferable since its more hermetic):
-# docker run   -e USER="$(id -u)" \
-#   -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output  \
-#    -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
-#    gcr.io/cloud-builders/bazel@sha256:f00a985c3196cc58819b6f7e8e40353273bc20e8f24b54d9c92d5279bb5b3fad  \
-#     --output_user_root=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
-#
-# skopeo inspect --format "{{.Name}}@{{.Digest}}"  docker-daemon:us-central1-docker.pkg.dev/builder-project/repo1/tee:server
-
-
 # pull the image.  you should see the exact same image hash
-docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
-docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server | jq -r '.[].RepoDigests[]'
-docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
 
+docker pull us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server
+export IMAGE_HASH=`docker inspect us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server | jq -r '.[].RepoDigests[]'`
+docker inspect $IMAGE_HASH
+echo $IMAGE_HASH
+
+# crane copy --all-tags us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee docker.io/salrashid123/tee
 # docker pull docker.io/salrashid123/tee:server
 # docker inspect docker.io/salrashid123/tee:server
 ```
-
-The cloud build step should give this specific container hash
-
-![images/build_hash.png](images/build_hash.png)
 
 The cloud build steps also used a kms key to sign the images using [cosign](https://github.com/sigstore/cosign).
 
@@ -311,7 +318,7 @@ Using `cosign` is a completely optional step used to add verification signatures
 
 Once the image is built and each collaborator is in agreement that the code contained in image 
 
-- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f` 
+- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01` 
 
 isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
 
@@ -336,7 +343,7 @@ export OPERATOR_PROJECT_NUMBER=`gcloud projects describe $OPERATOR_PROJECT_ID --
 
 # enable some services and create the artifact registry that will hold the image and cosign signature
 gcloud services enable \
-    compute.googleapis.com confidentialcomputing.googleapis.com pubsub.googleapis.com
+    compute.googleapis.com confidentialcomputing.googleapis.com pubsub.googleapis.com cloudkms.googleapis.com
 
 # create a service account the confidential space VM's will run as
 gcloud iam service-accounts create operator-svc-account
@@ -428,7 +435,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
 ## we've already performed corse grain authorization on the workload pool and this step
 ## applies fine grain control to a specific image to decrypt data
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"  \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/$IMAGE_HASH"  \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -441,7 +448,7 @@ In other words, the use of the KMS key is now bound to the operator's project wh
 Access is granted to an identity bound to the image:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
+principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/$IMAGE_HASH
 ```
 
 We could have configured the entire workload provider to mandate that any access to any resource must include that specific image has.  This demo, however, abstracts it to the resource (KMS key) binding.  This was done to allow more operational flexibility: if the image builder creates a new image hash, each collaborator can more easily replace the IAM binding on specific resources instead of redefining the entire providers constraints.
@@ -449,17 +456,17 @@ We could have configured the entire workload provider to mandate that any access
 Alternatively, if you wanted the top-level IAM binding to include the `image_hash` alone, the command would be something like
 
 ```bash
-gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
-    --location="global"     --workload-identity-pool="trusted-workload-pool"   \
-      --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
-          --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
-             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts && 'assertion.submods.container.image_reference == us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f'"
+# gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
+#     --location="global"     --workload-identity-pool="trusted-workload-pool"   \
+#       --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
+#           --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
+#              --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts && 'assertion.submods.container.image_reference==$IMAGE_HASH'"
 
 # this will allow all identities in the provider access to the key.
 #  since the provider includes the image_hash and project, its bound to the operator's environment
-gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/*"  \
-     --role=roles/cloudkms.cryptoKeyDecrypter
+# gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
+#      --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/*"  \
+#      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
 >> **important** Note that since this is just a demo, the HTTP or pubsub message any collaborator sends is blindly used by application to access the KMS key.  So if  `collaborator-3` somehow could submit messages to the topic or post data over mTLS using certs, the application would go through the process to acquire their kms key and decrypt.  In reality, what you should do is have code or configuration that stipulates only a predefined set of collaborators can participate (eg, instead of the pubsub message itself feeding in the `audience` and `kmskey`, you have that set in code, config or container start args so that collaborator 1 and 2 knows that only their data is in the sandbox).
@@ -499,7 +506,7 @@ gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=glob
      --member="user:$COLLABORATOR_2_GCLOUD_USER"   --role=roles/cloudkms.cryptoKeyEncrypter
 
 gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_2_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"  \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/$IMAGE_HASH"  \
      --role=roles/cloudkms.cryptoKeyDecrypter
 ```
 
@@ -545,36 +552,39 @@ gcloud projects add-iam-policy-binding $OPERATOR_PROJECT_ID \
 # we are using the image-family=confidential-space here which does **NOT** allow SSH...we've also specified that this vm 
 ### https://cloud.google.com/compute/confidential-vm/docs/reference/cs-options
 
+## you can also list the images (as of now they are)
+$ gcloud compute images list --project confidential-space-images --no-standard-images
+
 ## There are two options, pick one: 
 ### A) start a VM with no external IP where collaborators use pubsub to send data
 ### B) start VM with external IP where collaborators use mTLS Certs and Pubsub to send data
 
 ### A) Using pubsub and no external IP
-gcloud compute instances create vm1 --confidential-compute \
-  --shielded-secure-boot --tags=tee-vm \
-  --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
-  --image-project=confidential-space-images \
-  --image-family=confidential-space --network=teenetwork --no-address \
-  --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
-  --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f~tee-restart-policy=Never~tee-container-log-redirect=true
-
+# gcloud compute instances create vm1 --confidential-compute \
+#   --shielded-secure-boot --tags=tee-vm --project $OPERATOR_PROJECT_ID \
+#   --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
+#   --image-project=confidential-space-images \
+#   --image=confidential-space-231200 --network=teenetwork --no-address \
+#   --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
+#   --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true
 
 ### B) Using mTLS with external IP
-gcloud compute firewall-rules create allow-tee-inbound \
+#### first allow your (or in this case all), IP's to connect
+gcloud compute firewall-rules create allow-tee-inbound --project $OPERATOR_PROJECT_ID \
  --network teenetwork --action allow --direction INGRESS    --source-ranges 0.0.0.0/0     --target-tags tee-vm    --rules tcp:8081
 
 gcloud compute instances create vm1 --confidential-compute \
- --shielded-secure-boot --tags=tee-vm \
+ --shielded-secure-boot --tags=tee-vm --project $OPERATOR_PROJECT_ID \
  --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
  --image-project=confidential-space-images \
- --image-family=confidential-space --network=teenetwork \
+ --image=confidential-space-231200 --network=teenetwork \
  --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
- --metadata ^~^tee-image-reference=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f~tee-restart-policy=Never~tee-container-log-redirect=true
+ --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true
 
-export EXTERNAL_IP=`gcloud compute instances describe vm1 --zone=us-central1-a  --format='get(networkInterfaces[0].accessConfigs.natIP)'`
+export EXTERNAL_IP=`gcloud compute instances describe vm1 --project $OPERATOR_PROJECT_ID --zone=us-central1-a  --format='get(networkInterfaces[0].accessConfigs.natIP)'`
 echo $EXTERNAL_IP
 
-## for ssh access, set --image-family=confidential-space-debug and omit the `"STABLE" in assertion.submods.confidential_space.support_attributes`  in each collaborator pool/provider definition
+## for ssh access, set --image-project=confidential-space-debug --image=confidential-space-debug-231200 and omit the `"STABLE" in assertion.submods.confidential_space.support_attributes`  in each collaborator pool/provider definition
 # gcloud compute firewall-rules create allow-ingress-from-iap --network teenetwork --direction=INGRESS --action=allow --rules=tcp:22 --source-ranges=35.235.240.0/20
 # gcloud projects add-iam-policy-binding $OPERATOR_PROJECT_ID  --member=user:$GCLOUD_USER --role=roles/iap.tunnelResourceAccessor
 # gcloud projects add-iam-policy-binding $OPERATOR_PROJECT_ID --member=user:$GCLOUD_USER --role=roles/compute.instanceAdmin.v1
@@ -608,12 +618,13 @@ go run main.go \
 
 ## For HTTP
 cd http_client/
-go run client.go   \
+go run client.go  \
    --host $EXTERNAL_IP:8081 \
    --server_name=tee.collaborator1.com \
    --audience="//iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier" \
    --kmsKey="projects/$COLLABORATOR_1_PROJECT_ID/locations/global/keyRings/kr1/cryptoKeys/key1" \
    --user=alice \
+   --expected_image_hash=$IMAGE_HASH \
    --ca_files=certs/root-ca-collaborator1.crt \
    --tls_crt=certs/client-collaborator1.crt \
    --tls_key=certs/client-collaborator1.key   
@@ -641,9 +652,10 @@ go run client.go   \
    --audience="//iam.googleapis.com/projects/$COLLABORATOR_2_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier" \
    --kmsKey="projects/$COLLABORATOR_2_PROJECT_ID/locations/global/keyRings/kr1/cryptoKeys/key1" \
    --user=alice \
+   --expected_image_hash=$IMAGE_HASH \
    --ca_files=certs/root-ca-collaborator2.crt \
    --tls_crt=certs/client-collaborator2.crt \
-   --tls_key=certs/client-collaborator2.key      
+   --tls_key=certs/client-collaborator2.key 
 ```
 
 If you happened to see the pubsub messages, you'll see the message data is encrypted:
@@ -659,6 +671,204 @@ Since both collaborators sent in `alice`, you'll see the count to 2
 ---
 
 ### Appendix
+
+
+#### Attestation Token Custom Audience and Nonce
+
+Confidential Space offers a convenient way to authenticate the TEE to Google APIs, other cloud provider or arbitrary systems and present its runtime identity in a way which assures a trusted image is running in a trusted operator's project is making the outbound call.
+
+This is possible because Google provides an externally verifiable signed JWT statement with claims about the runtime and the image thats running.
+
+This JWT can *only* get created within that confidential space environment and asserts many thing such as:
+
+* what is the current `image_hash` that is running
+* what is that image's runtime arguments and environment variables
+* is this running in confidential_space debug or prod runtime and what is its software version, secure boot status, etc
+* what is the project, zone, unique vm `instance_id`
+* what is the default service account for the 
+* many more
+
+If the application inside confidential space emits that token, a remote party can easily verify the JWT and claims.  
+
+Signature verification is done though a JWK endpoint `jwks_uri` like any standard OIDC provider:
+
+```json
+$ curl -s https://confidentialcomputing.googleapis.com/.well-known/openid-configuration | jq '.'
+
+{
+  "issuer": "https://confidentialcomputing.googleapis.com",
+  "jwks_uri": "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com",
+  "subject_types_supported": [
+    "public"
+  ],
+  "response_types_supported": [
+    "id_token"
+  ],
+  "claims_supported": [
+    "sub",
+    "aud",
+    "exp",
+    "iat",
+    "iss",
+    "jti",
+    "nbf",
+    "dbgstat",
+    "eat_nonce",
+    "google_service_accounts",
+    "hwmodel",
+    "oemid",
+    "secboot",
+    "submods",
+    "swname",
+    "swversion"
+  ],
+  "id_token_signing_alg_values_supported": [
+    "RS256"
+  ],
+  "scopes_supported": [
+    "openid"
+  ]
+}
+```
+
+There are two types of tokens the runtime has access to but are intended for different audiences and use:
+
+* `default token`
+
+  this is used to authenticate to GCP APIs using workload federation and the default GCP SDKs
+
+* `custom token`
+
+  this is a generic token used to authenticate which can be used for authentication, TLS or arbitrary application assertions
+
+##### Default Attestation Token
+
+The default JWT attestation token is intended for use with workload federation is available by simply reading a volume mount on visible to all runtimes at:
+
+* `/run/container_launcher/attestation_verifier_claims_token`
+
+
+The `aud:` is always has a static value `"https://sts.googleapis.com"` and as mentioned, is intended for use with GCP Workload Federation to access GCP APIs.
+
+**do not** transmit this token to any external source other than GCP APIs as this token can be replayed directly again to GCP (assuming no VPC-SC perimeter is setup)
+
+Anyway, the following describes enabling workload federation to access a KMS key using the default token that has the intended audience value
+
+```bash
+gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
+    --location="global"     --workload-identity-pool="trusted-workload-pool"   \
+      --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
+          --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
+             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts"
+
+gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/$IMAGE_HASH"  \
+     --role=roles/cloudkms.cryptoKeyDecrypter
+```
+
+Note that each image is authorized but the provider itself has claims only allowing access to a specific  project, the service account, the audience, issuer, etc
+
+In go, each GCP api client acquires the JWT token usign the standard library set which has the ability to read and load the token file:
+
+```golang
+	attestation_token_path := "/run/container_launcher/attestation_verifier_claims_token"
+  audience :="//iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/providers/attestation-verifier" 
+
+	c1_adc := fmt.Sprintf(`{
+	"type": "external_account",
+	"audience": "%s",
+	"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+	"token_url": "https://sts.googleapis.com/v1/token",
+	"credential_source": {
+	  "file": "%s"
+	}
+	}`, audience, *attestation_token_path)
+
+  kmsClient, err := kms.NewKeyManagementClient(ctx, option.WithCredentialsJSON([]byte(c1_adc)))
+  c1_decrypted, err := kmsClient.Decrypt(ctx, &kmspb.DecryptRequest{
+		Name:       key,
+		Ciphertext: []byte(data),
+	})
+```
+
+##### Custom Attestation Token
+
+Confidential space can also issue an externally verifiable OIDC token which with a custom `aud:` and nonce value (`eat_nonce` claim).
+
+This token is identical to the default token describe earlier in which is signed by google and includes information about the runtime (image_hash, project, status of confidential_space, etc).
+
+The critical difference is that this token allows the user to specify the audience and a custom nonce.   Having the ability to specify these values at runtime allows you to emit this token to external resoruces.
+
+You can specify a custom audience value and use this to access other cloud providers (described in a separate section)
+
+You can use the custom nonce value to embed data from the TLS channel which along with the token, you would achieve a form of "Channel Binding" (also described in a section below)
+
+You can use the custom nonce and/or audience to enable a multitude of protocols (eg, you can generate an RSA key at runtime, provide the RSA public key and set the hash of the public key as the nonce into the JWT; a remote party can verify the JWT, the hash the public key, compare and confidently know a confidential space image is holding the private key)
+
+Unlike the default token which you can "just read as a file", the custom token interface is surfaced as unix socket at
+
+* `/run/container_launcher/teeserver.sock`
+
+To access it, you need to transmit JSON describing the intended audience and nonce values as shown like this
+
+
+```golang
+// the json struct to post
+const (
+	TOKEN_TYPE_OIDC        string = "OIDC"
+	TOKEN_TYPE_UNSPECIFIED string = "UNSPECIFIED"
+)
+
+type customToken struct {
+	Audience  string   `json:"audience"`
+	Nonces    []string `json:"nonces"`
+	TokenType string   `json:"token_type"`
+}
+
+// with usage like
+customTokenValue, err := getCustomAttestation(customToken{
+	Audience: "http://audience",
+	Nonces:   []string{"0000000000000000000", "0000000000000000001"},
+	TokenType: TOKEN_TYPE_OIDC,  
+})
+
+// ******
+
+func getCustomAttestation(tokenRequest customToken) (string, error) {
+	httpClient := http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", "/run/container_launcher/teeserver.sock")
+			},
+		},
+	}
+	customJSON, err := json.Marshal(tokenRequest)
+	url := "http://localhost/v1/token"
+	resp, err := httpClient.Post(url, "application/json", strings.NewReader(string(customJSON)))
+	tokenbytes, err := io.ReadAll(resp.Body)
+	return string(tokenbytes), nil
+}
+```
+
+Just note, the `eat_nonce` value can be `string` or `[]string` in the JSON response depending if single or multple values are sent in.
+
+#### Authenticating with other Cloud Providers
+
+The easiest way to access resoruces in other providers is to use the custom JWT tokens and federation.  Basically, just configure the remote provider to accept the claims and OIDC token as described by the custom JWT as shown in the previous section.
+
+...unfortunately, AWS and Azure do **NOT** allow arbitrary claim validation (meaning, you cannot setup a AWS federation claim which checks for the `image_hash` value, for example).  For AWS's limitation, see [note](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_iam-condition-keys.html#cross-condition-keys-wif)
+
+Which means for AWS and Azure, you have to use a provider like GCP KMS to return a decrypted secret or Hashicorp Vault to exchange the attestation JWT for aws secret or azure client certificates.  
+
+Alternatively, you could run an AWS Lambda function which validates the Attestation JWT and proxies an `AWS_ACCESS_TOKEN` back to the cs instance (basically a token broker).   However, note that if you are using Lambda or a Cloud Function, you can't make use of the TLS EKM capability (since it does not terminate the TLS session)
+
+##### AWS Credentials for Confidential Space
+
+* `EKM golang SDK Credential and Process Credential for Confidential Space`: [misc/aws-channel-jwt-credential](misc/aws-channel-jwt-credential)
+
+##### Azure Credentials for Confidential Space
+
+* `EKM golang SDK Azure Credential for Confidential Space`: [misc/azure-channel-jwt-credential](misc/azure-channel-jwt-credential)
 
 #### Audit Logging
 
@@ -738,52 +948,8 @@ There are several ways to do this
 
 Note, i've observed a build using bazel and kaniko produces the different hashes for the same code...not sure what the case is (implementation or have some small variation i didn't account for; likely the override stated below)...eitherway, i did see builds are self-consistent and reproducible using the same tool
 
-* Kaniko produces `tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f`
-* Bazel produces `tee@sha256:5262ccfa1cd487a709e59985d8be011c6c512e179c6876d9c4ecb5f1f2bd91a9`
-
-#### Bazel Overrides
-
-The bazel build configuration in this repo works as is (it better!)...however it required several workarounds due to the way bazel's `rules_go` works with generated google api protos.  
-
-Specifically if you upgrade the core libraries that inturn use generated protos that have [migrated](https://github.com/googleapis/google-cloud-go/blob/main/migration.md), you may have to setup the overrides for `com_google_cloud_go_logging` and `com_google_cloud_go_kms` as shown below.  You will have to also use `com_google_cloud_go_longrunning` at least at version `v0.4.1`
-
-For more information, see [#3423](https://github.com/bazelbuild/rules_go/issues/3423#issuecomment-1441192410)
-
-
-In this repo, the `go_repository{}` for the three libraries would have the following overrides.
-
-```
-load("@bazel_gazelle//:deps.bzl", "go_repository")
-
-def go_repositories():
-    go_repository(
-        name = "com_google_cloud_go_logging",
-        build_directives = [
-            "gazelle:resolve go google.golang.org/genproto/googleapis/longrunning @org_golang_google_genproto//googleapis/longrunning",  # keep
-            "gazelle:resolve go google.golang.org/genproto/googleapis/logging/v2 @org_golang_google_genproto//googleapis/logging/v2:logging",  # keep
-        ],
-        importpath = "cloud.google.com/go/logging",
-        sum = "h1:ZBsZK+JG+oCDT+vaxwqF2egKNRjz8soXiS6Xv79benI=",
-        version = "v1.6.1",
-    )
-    go_repository(
-        name = "com_google_cloud_go_longrunning",
-        importpath = "cloud.google.com/go/longrunning",
-        sum = "h1:v+yFJOfKC3yZdY6ZUI933pIYdhyhV8S3NpWrXWmg7jM=",
-        version = "v0.4.1",
-    )
-    go_repository(
-        name = "com_google_cloud_go_kms",
-        build_directives = [
-            "gazelle:resolve go google.golang.org/genproto/googleapis/cloud/kms/v1 @org_golang_google_genproto//googleapis/cloud/kms/v1:kms",   # keep
-        ],        
-        importpath = "cloud.google.com/go/kms",
-        sum = "h1:OWRZzrPmOZUzurjI2FBGtgY2mB1WaJkqhw6oIwSj0Yg=",
-        version = "v1.6.0",
-    )
-```
-
-If you upgrade any of these libraries, remember to run `gazelle` to regenerate the `repositories.bzl` and then replace the `build_directives` section on the new set.
+* Kaniko produces `tee@sha256:51af5e192f5c1f6debf16ec90764fe0dcd96e187a4fdd8d1175e3a2f483fb7a0`
+* Bazel produces `tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01`
 
 
 #### Credential Injection
@@ -850,13 +1016,12 @@ title: collaborator_1_perimeter
 Note, VPC-SC "ingressPolicy->ingressFrom->identity" does not support `principal://` or `principalSet://` get so we have to enable `ANY_IDENTITY`.  Ideally, we could tune the identity to:
 
 ```bash
-principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
+principalSet://iam.googleapis.com/projects/$COLLABORATOR1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/$IMAGE_HASH 
 ```
 
 If the TEE attempts to access the STS or KMS endpoint for any collaborator who _has not_ authorized the project for ingress, they would see a VPC-SC error at the level where the API is invoked.  In the following, the even the token grant fails
 
 ![images/vpc-sc.png](images/vpc-sc.png)
-
 
 #### mTLS using acquired Keys
 
@@ -929,7 +1094,7 @@ You can also achive `TEE->TEE` traffic for a single trusted collaborator by usin
 
 Networking between TEEs necessarily needs to be done over TLS or preferably mTLS using the one of the techniques outlined in the sections above.  
 
-Basically, the `TEE->TEE` traffic first needs one TEE to discovery the address resolution of another TEE peer.  Once thats done, the TLS connection needs to be such that they 'trust each other' (see mTLS section)
+Basically, the `TEE->TEE` traffic first needs one TEE to discovery the address resolution of another TEE peer.  Once thats done, the TLS connection needs to be such that they 'trust each other' (either with mTLS and/or EKM)
 
 There are many ways to establish service disovery of the TEE cluster/peers depending on the topoloy.  The service discovery system by itself can be hosted entirely by the operator in this case if the peer TLS is mutually trusted by bootstrapping after attestation.   In other words, even if the operator injects false TEE peer addresses, a client TEE cannot establish a TLS connection with the server since the server would not have bootstrapped mTLS credentials.
 
@@ -947,7 +1112,6 @@ Anyway, the various service discovery mechanisms
 
   Uses an external service where each client 'registers' itself to consul by presenting it with an OIDC attestation token
 
-
 You can also ensure `TEE->TEE` traffic by running a proxy that acquires certificates first before delegating the request to the backend (see example below for envoy network proxy).  Alternatively, the target TEE would acqquire the certificates and exec the target service's native tls configuration (see example below for redis and postgres ) You can find an example of that here:
 
 * [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
@@ -958,111 +1122,77 @@ Here is an end-to-end example with consul and envoy:
 
 To ensure multiple parties consent to the tee->tee traffic, thats a lot harder and experimental (see prior section)
 
+You can also use `Exported Key Materal (EKM)` as described below but that requires an application aware handling (vs just raw TLS keys)
 
-#### Attestation Token and JWT Bearer token
+##### Using Exported Key Material (EKM) TLS Attestation
 
-For reference, here is a sample decoded attestation JWT
+Its reasonable for remote clients to ask 
 
-Do **NOT** transmit this token to any other external system.   While its true a remote system _could_ use this as a bearer token, you would potentially compromise the security of other collaborators (i.,e a remote system can just use this token to access another collaborator's KMS key).
+1. _"how do i know i'm making an outbound connection *to* a TEE i trust? (eg. trust a connection from client-->TEE)"_
+2. _"how do i know i've just recieved a connection *from* a TEE i trust? (eg. trust a connection from TEE-->server)"_
 
-Instead, you can generate a JWT token using another KMS key you have access to though [golang-jwt for crypto.Signer](https://github.com/salrashid123/golang-jwt-signer) or simply use a secret decrypted with an initial bootstrapped KMS key.
+Both flows are described below but focuses on using a technique involving `Exported Key Material (EKM)`.
 
-- `/run/container_launcher/attestation_verifier_claims_token`
+* **client --> TEE**
 
-```json
-{
-  "aud": "https://sts.googleapis.com",
-  "exp": 1683607320,
-  "iat": 1683603720,
-  "iss": "https://confidentialcomputing.googleapis.com",
-  "nbf": 1683603720,
-  "sub": "https://www.googleapis.com/compute/v1/projects/vegas-codelab-5/zones/us-central1-a/instances/vm1",
-  "tee": {
-    "version": {
-      "major": 0,
-      "minor": 0
-    },
-    "platform": {},
-    "container": {
-      "image_reference": "",
-      "image_digest": "",
-      "restart_policy": "",
-      "image_id": "",
-      "env_override": null,
-      "cmd_override": null,
-      "env": null,
-      "args": null
-    },
-    "gce": {}
-  },
-  "secboot": true,
-  "oemid": 11129,
-  "hwmodel": "GCP_AMD_SEV",
-  "swname": "CONFIDENTIAL_SPACE",
-  "swversion": [
-    "1"
-  ],
-  "dbgstat": "disabled-since-boot",
-  "google_service_accounts": [
-    "operator-svc-account@vegas-codelab-5.iam.gserviceaccount.com"
-  ],
-  "submods": {
-    "container": {
-      "image_reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f",
-      "image_digest": "sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f",
-      "restart_policy": "Never",
-      "image_id": "sha256:ea901e29de82397b78616fb98cb7d5d09afeb11b804ac98dabcd77208e79ea41",
-      "env_override": null,
-      "cmd_override": null,
-      "env": {
-        "HOSTNAME": "vm1",
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"
-      },
-      "args": [
-        "./server"
-      ]
-    },
-    "gce": {
-      "zone": "us-central1-a",
-      "project_id": "vegas-codelab-5",
-      "project_number": "75457521745",
-      "instance_name": "vm1",
-      "instance_id": "6920867375712861823"
-    },
-    "confidential_space": {
-      "support_attributes": [
-        "LATEST",
-        "STABLE",
-        "USABLE"
-      ]
-    }
-  }
-}
-```
+This can be done a couple of ways such as having the client trust the server's TLS public certificate.  
 
-#### Authenticating with other Cloud Providers
+In this mode, the client is assured that the server's certificate will only get distributed to a TEE of a defined specification.  This is described at: [mTLS proxy containers for GCP Confidential Compute](https://github.com/salrashid123/tee_server_proxy)
 
-The KMS keys the collaborators granted access to is a generic decryption key:  you can use it to unwrap any arbitrary access tokens for any other cloud provider.  
+However, there is another mechanims which spans the TLS and application layers:  using `Exported Key Material` derived from the TLS channel to issue an Attestation JWT which is compared at the client side.   
 
-For example, the encrypted data that is returned need not be just some text as in the example here but any AWS or Azure credential set which you can use to access any other service's APIs.
+Its easiest explained like this:
 
-Just as a side note, you can also keep access secrets still within KMS systems (vs beaming them down).  In this mode, any access to other cloud providers requires GCP KMS key access.
+1. client attemps to call an initial auth API on TEE (e.g. `/connect`)
 
-For example
+2. TLS session is setup between `client --> TEE`
 
-* [KMS, TPM and HSM based Azure Certificate Credentials](https://blog.salrashid.dev/articles/2022/azsigner/)
-* [Embedding AWS_SECRET_ACCESS_KEY into Trusted Platform Modules, PKCS-11 devices, Hashicorp Vault and KMS wrapped TINK Keyset](https://blog.salrashid.dev/articles/2021/aws_hmac/)
-  
-    Unfortunately, at the moment GCP KMS limits the keysize you can [import to  32bytes!](https://blog.salrashid.dev/articles/2021/hmac_sha_key_size/)....which is less than an AWS Secret size...meaning, you can't use this mechanism for aws
+   Both client and TEE will arrive at the _same_ EKM value unique to the TLS session
+
+3. TEE will create a JWT Attestation Token where the `eat_nonce` claim includes the shared EKM value
+
+4. TEE will respond back to the `/connect` with the JWT 
+
+5. client will:
+
+   * verify the JWT is signed by GCP Confidential Space
+   * extract the `image_hash`, confirm its the version it expects
+   * extract the EKM claim from the `eat_nonce` claim, confirm it matches the TLS session
+   * at this point, the client knows for sure the server is the TEE since it returned the claim with the nonce
+
+6. After the initial `/connect` step, the client has a trusted channel where they can submit additonal api calls to the TEE
+
+The default sample in this repo demonstrates this mechanism where the EKM is verified with the initial `/connect` and from then on the `/cert` and `/increment` api calls uses the same trusted channel (connection object).
+
+* **TEE --> Server**
+
+In this flow, the TEE makes an _outbound_ connection to a remote server which can inspect the TLS Session (i.e. acquire the EKM directly).
+
+The way this is done is when the TEE wants to connect outbound to a remote server, it can encode the TLS EKM into the attestation jwt and send jwt as a bearer token:
+
+1. TEE wants to connect to a remote server (eg, `httpbin.org`)
+
+2. TEE makes a TLS connection to the remote server and derives the EKM value
+
+3. TEE creates an attestation token with `aud: https://httpbin.org` and `eat_nonce: ["the_ekm_value"]`
+
+4. TEE attaches the JWT as a bearer token while making the actual API call using the same connection from step 
+
+5. Remote server will receive the inbound connection, extract the TLS EKM value, verify the JWT claims (`image_hash`, etc), then compare the ekm value inside the `eat_nonce` with the derived TLS value
+
+6. at this point, the remote server knows it just got a connection from a trusted TEE
+
+The default sample in this repo domstrates this flow with httpbin.  Ofcourse httpbin cannot validate steps 5 and 6 but that is already done shown in _client --> TEE_ section.
 
 
-You maybe tempted to setup GCP Workload Federation with other cloud providers from the TEE as shown here
+For more details about using EKM, see
 
-* [Federate Google Cloud OIDC tokens for Azure Access Tokens](https://blog.salrashid.dev/articles/2022/azcompat/)
-* [Federate Google Cloud OIDC tokens for AWS Access Tokens](https://blog.salrashid.dev/articles/2022/awscompat/)
+- [Keying Material Exporters for Transport Layer Security (TLS)](https://www.rfc-editor.org/rfc/rfc5705.html)
+- [Exported Key Material (EKM) in golang and openssl](https://github.com/salrashid123/go_ekm_tls)
 
-However, you can't use the TEE attestation oidc token (for the reason described earlier)...nor can you use the VM's [instance identity document](https://cloud.google.com/compute/docs/instances/verifying-instance-identity) since any VM (Confidential Space or otherwise) in operator's project would surface that same google OIDC token specifications.
+Note that you can also use the EKM to create mTLS connections:
+
+- [mtls golang Exported Key Material](https://github.com/salrashid123/go_mtls_scratchpad/tree/main#exported-key-material)
 
 #### Outbound traffic via NAT
 
@@ -1208,27 +1338,6 @@ Noteably, you can apply BQ `Differential Privacy` functions to encrypted data an
 
 For an actual example, see [BQ Differential Privacy using AEAD and GCP Confidential Space](https://gist.github.com/salrashid123/3d7bc17e2d3f096e68e1bd27e4baea5e)
 
-#### Using CloudSQL
-
-While you might be tempted to use the same technique as BigQuery encryption with CloudSQL-postgres `pgcrypto` extension, the bind parameters would be logged.
-
-Postgres has server-side settings that would allow logging of these encryption keys which is not be desireable by the client submitting the query (you don't want your keys to get logged!)
-
-Its _possible_ to detect if server-side logging is enabled with ClouSQL if the client issues the query can first check if postgres as bind parameter logging enabled or not:
-
-```sql
-select setting from pg_settings where name = 'log_parameter_max_length';
-select setting from pg_settings where name = 'log_parameter_max_length_on_error';
-```
-
-At the moment (11/16/22), GCP CloudSQL Postgres _does not allow_ you to set these values (its a pending feature)
-
-Once it does, GCP CloudSQL [does not allow superuser](https://cloud.google.com/sql/docs/postgres/users#superuser_restrictions) logins so one the settings above are verified, the client can submit the query (**NOTE**: take that with a big grain of salt; i do not know postgres and there maybe other vectors to surface the bind parameters)
-
-Anyway,  following the same technique as BQ, the column data for each collaborator is encrypted using their AES keys which each releases to the TEE is described at
-
-* [Postgres Encrypted columns using pgcrypto on Google CloudSQL](https://gist.github.com/salrashid123/b8fb527c9577ceacb2c3fe5807eae98e)
-
 #### Using SecretManager
 
 [SecretManager](https://cloud.google.com/secret-manager/docs/overview) can be used as an alternative to KMS encrypted keys if the nature of the sensitive data is more appropriate for secrets-based transfer rather than wrapped encryption.
@@ -1272,191 +1381,125 @@ For example, if you're dealing with an ML model you deem sensitive, you can [exp
 If you're just attempting to serialize a simple class, you can use a library like [dill](https://dill.readthedocs.io/en/latest/) to serialize that class and then encrypt it with a KMS key. For example, if the following funciton [RCE()](https://gist.github.com/salrashid123/545c8e8b2b07746fdb8c2a15805ef242) is deemed sensitive, then you can use dill to decrypt it inside the TEE.
 
 
-#### Using Hashicorp Vault
-
-If you have an on-prem [Hashicorp Vault](https://www.vaultproject.io/) which saves encryption keys, you can access it from within the TEE by passing through a GCP KMS encrypted `VAULT_TOKEN`, unwrapping it within the TEE.
-
-Alternatively, you can just use Vault's [JWT Auth](https://developer.hashicorp.com/vault/docs/auth/jwt) mechansim.
-
-In this mode, you use the TEE's attestation token and emit that to your vault server.  The vault server validates the TEE specicifcations and returns a `VAULT_TOKEN` for the TEE to use again.
-
->> Note: you _are_ emitting the TEE's attestation token externally here.  Earlier on in this tutorial, we mentioned that you should not emit this token in a multiparty system (eg, to prevent replay or compromise another collaborator security).  However, if you are the _only_ collaborator, you can emit the token to your own VAULT server.
-
-Critically, also note that the TEE attestation token has a fixed audience value (`https://sts.googleapis.com`).  If you sent this TEE token to your vault server as-is, you are somewhat misusing the intent for that claim and token (i.,e its intended auidence is GCP's STS server; not your vault server). 
-
-Once Confidential Space allows custom audiences,  you can use this VAULT auth mechansim against multiple collaborators onprem server as well as GCP APIs since you can define your own audience settings.
-
-In short, its not recommened to use this mechanism but the following is there for completeness:
-
-Anyway, here is a sample Vault JWT configuration that would authorize a specific image similar to the workload federation done in this tutorial.
-
-```hcl
-vault write auth/jwt/config \
-    jwks_url="https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com" \
-    bound_issuer="https://confidentialcomputing.googleapis.com/"
-```
-
-Vault operator defines fine-grained role that enforces the image policy
-
-```hcl
-vault write auth/jwt/role/my-jwt-role -<<EOF
-{
-  "role_type": "jwt",
-  "policies": ["token-policy","secrets-policy"],
-  "token_explicit_max_ttl": 60,
-  "user_claim": "sub",
-  "bound_audiences": ["https://sts.googleapis.com"],
-  "bound_subject": "https://www.googleapis.com/compute/v1/projects/vegas-codelab-5/zones/us-central1-a/instances/vm1",
-  "claims_mappings": {
-    "hwmodel": "hwmodel",
-    "swname": "swname",
-    "/submods/confidential_space/support_attributes": "/submods/confidential_space/support_attributes",    
-    "/submods/container/image_digest": "/submods/container/image_digest",
-    "/submods/gce/project_id":"/submods/gce/project_id",
-    "google_service_accounts":"google_service_accounts"
-  },
-  "bound_claims": {
-    "hwmodel": "GCP_AMD_SEV",
-    "swname": "CONFIDENTIAL_SPACE",
-    "/submods/confidential_space/support_attributes": ["STABLE"],
-    "/submods/container/image_digest": ["sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"],
-    "/submods/gce/project_id": ["$OPERATOR_PROJECT_ID"],
-    "google_service_accounts":["operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com"]
-  }  
-}
-EOF
-```
-
-Exchange TEE Attestation token for an on-prem `VAULT_TOKEN`:
-
-The equivalent usage with vault cli:
-
-```bash
-export VAULT_CACERT='/path/to/tls/ca.pem'
-export VAULT_ADDR='https://your_vault_server:443'
-
-export JWT_TOKEN=`cat /run/container_launcher/attestation_verifier_claims_token`
-
-export VAULT_TOKEN=`vault write -field="token" auth/jwt/login role=my-jwt-role jwt="$JWT_TOKEN"`
-echo $VAULT_TOKEN
-
-# now use the vault token to access a secret or key
-vault kv put kv/message foo=world
-vault kv get kv/message
-```
-
-also see
-
-- [Vault auth and secrets on GCP](https://github.com/salrashid123/vault_gcp)
-
-
-#### Threshold Encryption and Signatures
-
-You can also easily use the TEE to perform [Threshold Cryptography](https://en.wikipedia.org/wiki/Threshold_cryptosystem) functions like signing or encryption/decryption.
-
-In this mode, each collaborator's threshold key is encrypted by their own KMS key and is decrypted within the TEE.
-
-Once the TEE receives the `t of n` keys, it can perform encryption or signing per key-type.
-
-The following uses [go.dedis.ch/kyber](https://pkg.go.dev/go.dedis.ch/kyber) library and writes the public and private keys in binary to a file.  
-
-For use with KMS, each participant would encrypt the binary form of the marshalled key first and transmit that content to the TEE for decryption.
-
-* [Threshold Signatures](https://gist.github.com/salrashid123/c936fcbaa40c403232351f67c17ee12f)
-* [Threshold Encryption](https://gist.github.com/salrashid123/a871efff662a047257879ce7bffb9f13)
-
 #### Container image signing and verification
 
-Confidential Space has no built in capability for [Cryptographic Signing for Containers](https://aws.amazon.com/blogs/containers/cryptographic-signing-for-containers/) or any way to ensure that N parties provided their [signatures against the image](https://blog.sigstore.dev/cosign-image-signatures-77bab238a93/) itself. As a side note, a container signature is actually the hash of json formatted file which includes the image manifests digest itself (see [this example](https://gist.github.com/salrashid123/4138d8b6ed5a89f5569e44eecbbb8fda))
+Confidential Space provides a built in mechansim which verifies the any signatures associated with the container image.
 
-While each collaborator can ensure a specific image hash is exclusively authorized to access their KMS key, there is no direct mechanims that ensures the container was approved and authorized (i.,e signed) by outside parties.
+Once verification is done, the set of public keys that have matched signatures get encoded into the attestation JWTs.   
 
-GCP provides [binary authorization](https://cloud.google.com/binary-authorization) which seeks to only allow a specific container to be _deployed_ to managed services like GKE, Cloud Run and Anthos if N parties provided [attestations](https://cloud.google.com/binary-authorization/docs/attestations) by means of a signature.
+The idea is if you want to say _"ok, release my KMS key to a runtime only if it was signed by `PublicKeyA` and `PublicKeyB`"_, you can define a workload condition which looks for those public keys in the JWT claim.  
 
-In the case of Confidential Space, the operator is in charge of the deployment which means if each collaborator needs to ensure N parties provided their signatures, they cannot rely on deployment admission controllers because that is not detached from the operators control.
+Since GCP **already verified the signatures** against the keys, you just have to trust the  claims in the JWT provided by GCP (vs each specific `image_hash`)
 
-There are several alternatives where the signature checks happen during runtime (late binding) or prior to authorizing the image for KMS access (early binding)
+The default clould build sample in this repo attaches the KMS key based signature to the image in such a way that it will get validated first by GCP and emitted in the JWT.
 
-- `early binding`
+If we were going to do this manually, each signer would first sign and attach the public key as a custom annotation to some repo which is readable by the operator
 
-  If a collaborator wants to ensure that the operator or some third party submitted/attested the container+hash, the collaborator can "just verify" that was done prior to authorizing the container for KMS access.
-
-  This would require the workflow pipleine for each collaborator to get notification of a new candidate image for deployment, then check if the requsite signatures were provided and only then authorize KMS access specifically for that image.
-
-  The specific workflows involved for the notification and verification of candidate containers is implementation dependent and is not covered here.
-
-  If `sigstore/cosign` is used the collaborator would need to iterate over the public keys for each attestor he/she is interested in and then once satisfied, proceed to authorize the image.   The section below describes using cosign cli and api to verify containers.
-
-  If [gcp binary authorization](https://cloud.google.com/binary-authorization) is used by the operator as the "signature system", the collaborator can verify N parties provided signatures by invoking the operators binary authorization api, then reading and verifying which parties provided signatures (eg the collaborator would run `gcloud beta container binauthz attestations list --attestor=myattestor --project=$OPERATOR_PROJECT_ID` prior to authorization). A more formal confirmation that signatures were provided could be if the operator enabled GCP Audit Logs for the binaryauthorization API.  If that step is done, each attestation is encoded in the operators audit log permanently.  [Here](https://gist.github.com/salrashid123/2ca607fee4977244136cb1ae0d37173f) is an example of Binary Authorization Audit Log.  Once in audit log, the collabortors can subscribe to events via GCP [eventarc](https://cloud.google.com/eventarc/docs/event-driven-architectures) which can notify of any new signatures or changes.   
-
-  Finally, authorizing at a per image hash scope is made a bit easier with this repo since it does _not_ setup full authorization at the [workload provider and pool](https://cloud.google.com/iam/docs/workload-identity-federation-with-other-clouds#oidc) level and instead sets it at the resource IAM binding:
-  
-  ```bash
-  gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
-     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/attribute.image_reference/us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"  \
-     --role=roles/cloudkms.cryptoKeyDecrypter
-  ```
-
-  This allows for multiple, rapid IAM binding at the resource per image without defining a new pool.
-
-
-- `late binding`
-
-  With late binding, the cotntainer on startup checks for the requsite signatures during the applications `init()` stage.  
-  
-  In other words, the acutual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system or simply read the signatures passed as startup arguments to the container runtime.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
-  
-  This mechanism is described in detail below
-
-#### Check Cosign Signature and Attestation at Runtime
-
-Confidential space does not currently verify if the image being deployed was signed by various parties with any attestations.  
-
-This is where [cosign](https://github.com/sigstore/cosign) can help add a participant or third party siganatures to the images.
-
-In the example here,  the builder's generated sigature is added in during the cloudbuild steps using the builders's KMS key.  
-
-To check the cosign signatures and attestations, install cosign and then:
+so if the signer is the builder as is the case with this repo,
 
 ```bash
-### verify with cosign
-## first login to ADC as the builder
-## gcloud config configurations activate builder
-## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
-## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
-## gcloud auth application-default login
-$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
+## generate the hash value of the public key
+gcloud config configurations activate builder
+export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
+export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
 
-📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
-└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f.att
-   ├── 🍒 sha256:cf47d0e4b5497f43ca9fc1010aeff66ad090539c9c209c421f8880693b8ad20f
-   └── 🍒 sha256:ffe6fd0cf1d33f675e0d15449a155b67824f52bcb00b9b895d2d8dac0ca4f436
-└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f.sig
-   └── 🍒 sha256:28d0920083646f1f4d7e945f1c9dc2eda7881df81ef36c4b5df9dac925138e0c
-└── 📦 SBOMs for an image tag: us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f.sbom
-   └── 🍒 sha256:2c011edec264809e797e4d37068792dafaadb87f772a72ae0eb5bf3db90299c3
+$ gcloud kms keys versions get-public-key 1 \
+   --key key1 \
+    --keyring cosignkr \
+    --location global --output-file /tmp/kms_pub.pem
+
+$ cat /tmp/kms_pub.pem 
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnJkxPkNBdsTfuQnZJAmE6tVEosTG
+YemTaQl+60OLRsymUD8GfTCogGrgRHmNTaIiVzkPbWYB3iK27MuYkAGyMQ==
+-----END PUBLIC KEY-----
+
+export PUB=`cat /tmp/kms_pub.pem |  openssl enc -A -a | tr -d '=' | tr '/+' '_-'`
+echo $PUB
+
+### in my case its:
+### LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbkpreFBrTkJkc1RmdVFuWkpBbUU2dFZFb3NURwpZZW1UYVFsKzYwT0xSc3ltVUQ4R2ZUQ29nR3JnUkhtTlRhSWlWemtQYldZQjNpSzI3TXVZa0FHeU1RPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg
 ```
 
-which will exist as additional artifacts in the registry
-
-![images/artifacts.png](images/artifacts.png)
+the Builder signs and attach the public key as a **custom annotation** :
+note that we're attaching the public key's fingerprint as an annotation here: dev.cosignproject.cosign/pub
 
 ```bash
-# get the public key for the cosigned image
-gcloud kms keys versions get-public-key 1  \
-  --key=key1 --keyring=cosignkr \
-  --location=global --output-file=/tmp/kms_pub.pem
+$ cosign sign  --key -key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 \
+  -a dev.cosignproject.cosign/sigalg=ECDSA_P256_SHA256 \
+  -a dev.cosignproject.cosign/pub=$PUB --tlog-upload=false \
+  --upload=true $IMAGE_HASH
+```
 
-## verify 
-# you can also reference the kms key via url instead of using a local one
-#   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
+From there, Operator will deploy the image and specify where the signature repo exists using `tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee` startup parameter
 
-cosign verify --key /tmp/kms_pub.pem   \
-   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f  | jq '.'
+```bash
+gcloud compute instances create vm1 --confidential-compute \
+ --shielded-secure-boot --tags=tee-vm \
+ --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
+ --image-project=confidential-space-images \
+ --image-family=confidential-space --network=teenetwork \
+ --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
+ --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true~tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee
+```
 
-# the output for the verify will look like:
+At runtime, confidential space attesation server will verify the signatures by first reading the annotation value and extracting the public key from the `signed-image-repos`:
 
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f --
+basically, the attestation server runs something like this after reading in `tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee`
+
+```bash
+$ cosign download signature $IMAGE_HASH | jq '.'
+
+{
+  "Base64Signature": "MEUCIQD01hcf6D8kWUB5U44y/7O9I7FLDgwcb/EVuMoed7eeVgIgHSvTA0WFgZxG/63bCw1Lw9m7rJ8mFqoLwTKEOiUq1Ec=",
+  "Payload": "eyJjcml0aWNhbCI6eyJpZGVudGl0eSI6eyJkb2NrZXItcmVmZXJlbmNlIjoidXMtY2VudHJhbDEtZG9ja2VyLnBrZy5kZXYvYnVpbGRlci0zOTUzMDMvcmVwbzEvdGVlIn0sImltYWdlIjp7ImRvY2tlci1tYW5pZmVzdC1kaWdlc3QiOiJzaGEyNTY6YzlhY2FlZDMzYmFhOTRjZGFmOTQ2ZTI5MDVjOWM0NWFiMDhkYjU5NTFjYzg0NTVjYjRjNTMyZjFiZTA5M2UwMSJ9LCJ0eXBlIjoiY29zaWduIGNvbnRhaW5lciBpbWFnZSBzaWduYXR1cmUifSwib3B0aW9uYWwiOnsiZGV2LmNvc2lnbnByb2plY3QuY29zaWduL3B1YiI6IkxTMHRMUzFDUlVkSlRpQlFWVUpNU1VNZ1MwVlpMUzB0TFMwS1RVWnJkMFYzV1VoTGIxcEplbW93UTBGUldVbExiMXBKZW1vd1JFRlJZMFJSWjBGRmJrcHJlRkJyVGtKa2MxUm1kVkZ1V2twQmJVVTJkRlpGYjNOVVJ3cFpaVzFVWVZGc0t6WXdUMHhTYzNsdFZVUTRSMlpVUTI5blIzSm5Va2h0VGxSaFNXbFdlbXRRWWxkWlFqTnBTekkzVFhWWmEwRkhlVTFSUFQwS0xTMHRMUzFGVGtRZ1VGVkNURWxESUV0RldTMHRMUzB0Q2ciLCJkZXYuY29zaWducHJvamVjdC5jb3NpZ24vc2lnYWxnIjoiRUNEU0FfUDI1Nl9TSEEyNTYiLCJrZXkxIjoidmFsdWUxIn19",
+  "Cert": null,
+  "Chain": null,
+  "Bundle": null,
+  "RFC3161Timestamp": null
+}
+```
+
+decode the `Payload`
+
+```json
+{
+  "critical": {
+    "identity": {
+      "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
+    },
+    "image": {
+      "docker-manifest-digest": "sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01"
+    },
+    "type": "cosign container image signature"
+  },
+  "optional": {
+    "dev.cosignproject.cosign/pub": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbkpreFBrTkJkc1RmdVFuWkpBbUU2dFZFb3NURwpZZW1UYVFsKzYwT0xSc3ltVUQ4R2ZUQ29nR3JnUkhtTlRhSWlWemtQYldZQjNpSzI3TXVZa0FHeU1RPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg",
+    "dev.cosignproject.cosign/sigalg": "ECDSA_P256_SHA256",
+    "key1": "value1"
+  }
+}
+```
+
+then extract and decode `dev.cosignproject.cosign/pub` value which is the public key used to sign:
+
+```bash
+$ echo -n "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbkpreFBrTkJkc1RmdVFuWkpBbUU2dFZFb3NURwpZZW1UYVFsKzYwT0xSc3ltVUQ4R2ZUQ29nR3JnUkhtTlRhSWlWemtQYldZQjNpSzI3TXVZa0FHeU1RPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg" | base64 --decode
+
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnJkxPkNBdsTfuQnZJAmE6tVEosTG
+YemTaQl+60OLRsymUD8GfTCogGrgRHmNTaIiVzkPbWYB3iK27MuYkAGyMQ==
+-----END PUBLIC KEY-----
+```
+
+then use the public key to verify the image signature:
+
+```bash
+$ cosign verify --key /tmp/kms_pub.pem \
+   --insecure-ignore-tlog=true \
+   $IMAGE_HASH | jq '.'
+
+Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -1464,331 +1507,98 @@ The following checks were performed on each of these signatures:
   {
     "critical": {
       "identity": {
-        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee"
+        "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"
+        "docker-manifest-digest": "sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01"
       },
       "type": "cosign container image signature"
     },
     "optional": {
+      "dev.cosignproject.cosign/pub": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlLb1pJemowREFRY0RRZ0FFbkpreFBrTkJkc1RmdVFuWkpBbUU2dFZFb3NURwpZZW1UYVFsKzYwT0xSc3ltVUQ4R2ZUQ29nR3JnUkhtTlRhSWlWemtQYldZQjNpSzI3TXVZa0FHeU1RPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg",
+      "dev.cosignproject.cosign/sigalg": "ECDSA_P256_SHA256",
       "key1": "value1"
     }
   }
 ]
-
-# now verify the attestation that is cross checked with the rego in `policy.rego` (cosign_verify/policy.rego)
-#  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
-cosign verify-attestation --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f  | jq '.'
-
-
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f --
-The following checks were performed on each of these signatures:
-  - The cosign claims were validated
-  - The signatures were verified against the specified public key
-{
-  "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJjb3NpZ24uc2lnc3RvcmUuZGV2L2F0dGVzdGF0aW9uL3YxIiwic3ViamVjdCI6W3sibmFtZSI6InVzLWNlbnRyYWwxLWRvY2tlci5wa2cuZGV2L21pbmVyYWwtbWludXRpYS04MjAvcmVwbzEvdGVlIiwiZGlnZXN0Ijp7InNoYTI1NiI6ImE3NmZkNDBkODUxZDg5NWY2ZWVlMmIwNDdjZWFmODRmY2IwNjgxMmVmMTcwN2RiYzlhMjJlNGU3NGY0Y2ZkMWYifX1dLCJwcmVkaWNhdGUiOnsiRGF0YSI6InsgXCJwcm9qZWN0aWRcIjogXCJtaW5lcmFsLW1pbnV0aWEtODIwXCIsIFwiYnVpbGRpZFwiOiBcImFkMTMyMzBiLTlmYmQtNDA3NC1hYTA5LTQyNDNiYzdjN2Y2NlwiLCBcImZvb1wiOlwiYmFyXCIsIFwiY29tbWl0c2hhXCI6IFwiYzc0Yjk1ZDU3NzU1NTQ4MjA3MmE3OTMzZGY4MTEzZTU4M2E0ZDM2OVwifSIsIlRpbWVzdGFtcCI6IjIwMjMtMDUtMDlUMDM6Mzc6MDNaIn19",
-  "signatures": [
-    {
-      "keyid": "",
-      "sig": "MEUCIQDGCzFvlbbVM3msykva+PijsdrbwGBJ5EKBEHGp6J8TmwIgdt2rqQbqFR5Hye0L82pBYFrQ85ldAw9T0V5j1Pt/Hjg="
-    }
-  ]
-}
-
-
-## if you decode the payload, you'll see the predicate and image attestations (build number, commit hash, timestamp and the prediecate KV pair we sent during build (foo=bar in consign_verify/policy.rego))
-
-{
-  "_type": "https://in-toto.io/Statement/v0.1",
-  "predicateType": "cosign.sigstore.dev/attestation/v1",
-  "subject": [
-    {
-      "name": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee",
-      "digest": {
-        "sha256": "a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f"
-      }
-    }
-  ],
-  "predicate": {
-    "Data": "{ \"projectid\": \"mineral-minutia-820\", \"buildid\": \"ad13230b-9fbd-4074-aa09-4243bc7c7f66\", \"foo\":\"bar\", \"commitsha\": \"c74b95d577555482072a7933df8113e583a4d369\"}",
-    "Timestamp": "2023-05-09T03:37:03Z"
-  }
-}
 ```
 
-You can also encode in verificaiton of each participants cosign signatures into the code.
+Once the verfication is done, the attestation jwt will contain a claim denoting valid signatures and public keys:
 
-This is similar to [binary authorization](https://cloud.google.com/binary-authorization) except that the verification occurs incode using baked in public keys
-
-In this mode, the secure image you're deploying "checks" the hash value for its own image from `/run/container_launcher/attestation_verifier_claims_token` and then use a static (or configured) set of public or KMS keys to verify signatures or attestations predicates are preset.
-
-This is currently not included in this sample but you could modify it using examples [here](https://github.com/salrashid123/cosign_bazel_cloud_build/blob/main/client/main.go)
-
-As mentioned above, each collaborator could also optionally provide the builder a singature for inclusion to the registry.  
-
-
-For example:
-
-* 1 collaborator-1, -2 and builder creates a image signing key
-
-* 2 collaborator-1, -2 gives the public key for image siginig to the builder
-
-* 3 the deployed code does the following on `func init() {}`:
-
-  ```golang
-  const (
-    builder_public_key=".."
-    collaborator_1_public_key=".."
-    collaborator_2_public_key=".."
-  )
-  var (
-      signatures_to_check := []string{ builder_public_key, collaborator_1_public_key, collaborator_2_public_key }
-  )
-  func init() {
-    // verify attestation jwt and extract current image hash by decoding {submods.container.image_reference} from
-    // /run/container_launcher/attestation_verifier_claims_token
-    imageRef := "..."
-
-    for __, publicKey in range signatures_to_check {
-      // verify signatures using each publicKey against imageRef
-      // https://github.com/salrashid123/cosign_bazel_cloud_build/blob/main/client/main.go#L127-L190
-    }
-  }
-  ```
-
-* 4 collaborator-1, 2 builder _offline_ sign the image using their private key:
-  - [Sign without upload to registry](https://github.com/salrashid123/cosign_bazel_cloud_build/blob/main/README.md#sign-without-upload-to-registry)
-
-* 5 builder _attaches_ all the signatures to the registry
-  - [Sign offline and attach](https://github.com/salrashid123/cosign_bazel_cloud_build/blob/main/README.md#sign-offline-and-attach)
-  - Alternatively, the builder can provide the signatures as arguments to the TEE containers's startup
-
-* 6 On deployment, the startup init in step 3 will ensure all parties signed image before doing anything
-
-### Software Bill of Materials
-  
-This repo also demonstrates basic [Software Bill of materials](https://www.cisa.gov/sbom) for:
-
-* application code
-* container image
-
-The application code sbom is created as part of the build is _also_ generated using [syft](https://github.com/anchore/syft)  and `goreleaser` and can be found in the `Releases` section of the repo.  The sbom contains all the software used by go application.
-
-The container `sbom` is generated at build time and saved in the container registry.  
-
->> unfortunately, the `bazel` toolchain does not surface the go libraries used by the application. see
-
-* [syft/1725](https://github.com/anchore/syft/issues/1725)
-
-`kaniko` based builds, however, shows
-
-```bash
-$ syft packages    us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f
-
- ✔ Loaded image            
- ✔ Parsed image            
- ✔ Cataloged packages      [34 packages]
-
-NAME                                                VERSION                             TYPE      
-base-files                                          11.1+deb11u7                        deb        
-cloud.google.com/go                                 v0.107.0                            go-module  
-cloud.google.com/go/compute/metadata                v0.2.3                              go-module  
-cloud.google.com/go/iam                             v0.8.0                              go-module  
-cloud.google.com/go/kms                             v1.6.0                              go-module  
-cloud.google.com/go/logging                         v1.6.1                              go-module  
-cloud.google.com/go/longrunning                     v0.4.1                              go-module  
-cloud.google.com/go/pubsub                          v1.27.1                             go-module  
-github.com/golang-jwt/jwt                           v3.2.2+incompatible                 go-module  
-github.com/golang/groupcache                        v0.0.0-20200121045136-8c9f03a8e57e  go-module  
-github.com/golang/protobuf                          v1.5.2                              go-module  
-github.com/google/go-cmp                            v0.5.9                              go-module  
-github.com/googleapis/enterprise-certificate-proxy  v0.2.3                              go-module  
-github.com/googleapis/gax-go/v2                     v2.7.0                              go-module  
-github.com/gorilla/mux                              v1.8.0                              go-module  
-github.com/lestrrat/go-jwx                          v0.9.1                              go-module  
-github.com/lestrrat/go-pdebug                       v0.0.0-20180220043741-569c97477ae8  go-module  
-github.com/pkg/errors                               v0.9.1                              go-module  
-github.com/salrashid123/confidential_space/app      (devel)                             go-module  
-go.opencensus.io                                    v0.24.0                             go-module  
-golang.org/x/net                                    v0.6.0                              go-module  
-golang.org/x/oauth2                                 v0.5.0                              go-module  
-golang.org/x/sync                                   v0.1.0                              go-module  
-golang.org/x/sys                                    v0.5.0                              go-module  
-golang.org/x/text                                   v0.7.0                              go-module  
-google.golang.org/api                               v0.110.0                            go-module  
-google.golang.org/genproto                          v0.0.0-20230209215440-0dfe4f8abfcc  go-module  
-google.golang.org/grpc                              v1.53.0                             go-module  
-google.golang.org/protobuf                          v1.28.1                             go-module  
-libc6                                               2.31-13+deb11u6                     deb        
-libssl1.1                                           1.1.1n-0+deb11u4                    deb        
-netbase                                             6.3                                 deb        
-openssl                                             1.1.1n-0+deb11u4                    deb        
-tzdata                                              2021a-1+deb11u10                    deb       
-```
-
-The sboms also include signatures verfiying its authenticity.  
-
-The container image is signed by the same kms based cosing key
-
-#### Download and Verify image sbom:
-
-```bash
-# download the imagebom 
-$ cosign download sbom --output-file  latest.spdx.download \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f 
-
-$ cosign verify --key /tmp/kms_pub.pem --attachment=sbom   \
-        us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f  | jq '.'
-
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee:sha256-a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f.sbom --
-The following checks were performed on each of these signatures:
-  - The cosign claims were validated
-  - The signatures were verified against the specified public key
-[
-  {
-    "critical": {
-      "identity": {
-        "docker-reference": "us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee"
-      },
-      "image": {
-        "docker-manifest-digest": "sha256:d2f9fe2b82a3dcdb550f609af52606aa0a95d9e91feec8e196cbbed729300fa8"
-      },
-      "type": "cosign container image signature"
-    },
-    "optional": {
-      "commit_sha": "c74b95d577555482072a7933df8113e583a4d369"
-    }
-  }
-]
-```
-
-#### Download and Verify application sbom:
-
-For the application, note we're asking for the `type=` field below
-
-```bash
-cosign verify-attestation --key /tmp/kms_pub.pem   --type="https://cyclonedx.org/bom/v1.4" \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f  | jq '.'
-
-## note the payload:  thats the full signed software sbom generated as part of cloud build
-
-Verification for us-central1-docker.pkg.dev/mineral-minutia-820/repo1/tee@sha256:a76fd40d851d895f6eee2b047ceaf84fcb06812ef1707dbc9a22e4e74f4cfd1f --
-The following checks were performed on each of these signatures:
-  - The cosign claims were validated
-  - The signatures were verified against the specified public key
+```json
 {
-  "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi......really long decode as jwt",
-  "signatures": [
+  "image_signatures": [
     {
-      "keyid": "",
-      "sig": "MEUCID8m9LtTYV7Ag/e2QrYXrxb8AZeN6pCjspkZove+ZyHOAiEAvPViQRThkT2gz6geVIJZ2NU8YZefMmz3ZnF/CY1THAs="
+      "signature_algorithm": "ECDSA_P256_SHA256",
+      "signature": "MEUCIQD01hcf6D8kWUB5U44y/7O9I7FLDgwcb/EVuMoed7eeVgIgHSvTA0WFgZxG/63bCw1Lw9m7rJ8mFqoLwTKEOiUq1Ec=",
+      "key_id": "fc3cd070b22b02942d8216257f6c917d122eb2d6691027b3e8160306a4c71072",
     }
   ]
 }
 ```
 
-#### Local Kaniko build artifiact registry authentication
-
-The following config allows you to use local docker kaniko to push to container registry
+where the `key_id` is the fingerprint of the public key in hex:
 
 ```bash
-## acquired token is valid for 1 hour by default
-token=$(gcloud auth print-access-token)
-docker_token=$(echo -n "gclouddockertoken:$token" | base64 | tr -d "\n")
+export SIGNATURE_ALGORITHM="ECDSA_P256_SHA256"
+export FINGERPRINT=`openssl ec  -pubin -inform PEM -in /tmp/kms_pub.pem -outform DER | openssl dgst -sha256 | cut -d" " -f2`
 
-cat > ~/.docker/config_kaniko.json <<- EOM
+$ echo $FINGERPRINT
+fc3cd070b22b02942d8216257f6c917d122eb2d6691027b3e8160306a4c71072
+```
+
+Now that the attestation_jwt emits verified signatures as claims, each collaborator will need to setup authorization policies against it.
+
+This is done by setting up the workload pool to check the public keys that have verified signatures:
+
+```bash           
+gcloud config configurations activate collaborator-1
+export COLLABORATOR_1_PROJECT_ID=`gcloud config get-value core/project`
+export COLLABORATOR_1_PROJECT_NUMBER=`gcloud projects describe $COLLABORATOR_1_PROJECT_ID --format='value(projectNumber)'`
+export COLLABORATOR_1_GCLOUD_USER=`gcloud config get-value core/account`
+
+gcloud iam workload-identity-pools providers create-oidc attestation-verifier \
+    --location="global"     --workload-identity-pool="trusted-workload-pool"   \
+      --issuer-uri="https://confidentialcomputing.googleapis.com/"     --allowed-audiences="https://sts.googleapis.com" \
+          --attribute-mapping="google.subject=assertion.sub,attribute.image_reference=assertion.submods.container.image_reference"  \
+             --attribute-condition="assertion.swname=='CONFIDENTIAL_SPACE' && \"STABLE\" in assertion.submods.confidential_space.support_attributes && assertion.submods.gce.project_id=='$OPERATOR_PROJECT_ID' && 'operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com' in assertion.google_service_accounts && ['$SIGNATURE_ALGORITHM:$FINGERPRINT'].exists(fingerprint, fingerprint in assertion.submods.container.image_signatures.map(sig,sig.signature_algorithm+':'+sig.key_id))"
+
+## critically, we are now trusting all images that have signatures
+gcloud kms keys add-iam-policy-binding key1        --keyring=kr1 --location=global --project $COLLABORATOR_1_PROJECT_ID    \
+     --member="principalSet://iam.googleapis.com/projects/$COLLABORATOR_1_PROJECT_NUMBER/locations/global/workloadIdentityPools/trusted-workload-pool/*"  \
+     --role=roles/cloudkms.cryptoKeyDecrypter
+```
+
+The example above signs the image and uploads the file.  This assumes the signer can upload to that same container repository.  If you would rather sign offline and allow a different entity to upload your signature, see [Sign offline and attach](https://github.com/salrashid123/cosign_bazel_cloud_build#sign-offline-and-attach) and  [Cosign sign and verify with annotations](https://gist.github.com/salrashid123/7efde8ebb2c11c34727e9f934bd026fb)
+
+If you want to manually verify the signatures, see [Manual Container image signing and verification](misc/container_signing/)
+
+An end-to-end self-contained example that prints the attestation token and hash can be found [here](https://gist.github.com/salrashid123/7efde8ebb2c11c34727e9f934bd026fb):
+
+```bash
+export TEST_IMAGE_HASH=docker.io/salrashid123/myimage@sha256:9ec06569f1c169d4c5b380c64b803d287468d95429dab4e4449842f93a252049
+
+gcloud compute instances create vm1 --confidential-compute \
+       --shielded-secure-boot --tags=tee-vm --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com    --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a    \
+          --image-project=confidential-space-images --image=confidential-space-231200 \
+          --metadata ^~^tee-image-reference=$TEST_IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true~tee-signed-image-repos=docker.io/salrashid123/myimage
+
+
+cosign download signature $TEST_IMAGE_HASH | jq '.'
+
 {
-  "auths": {
-    "gcr.io": {
-      "auth": "$docker_token",
-      "email": "not@val.id"
-    },
-    "us.gcr.io": {
-      "auth": "$docker_token",
-      "email": "not@val.id"
-    },
-    "us-central1-docker.pkg.dev": {
-      "auth": "$docker_token",
-      "email": "not@val.id"
-    }
-  }
-}
-EOM
-
-## note the `config_kanklo.json file with the token is passed through to the container
-docker run    -v `pwd`:/workspace   -v $HOME/.docker/config_kaniko.json:/kaniko/.docker/config.json:ro  \
-             gcr.io/kaniko-project/executor@sha256:034f15e6fe235490e64a4173d02d0a41f61382450c314fffed9b8ca96dff66b2    \
-              --dockerfile=Dockerfile --reproducible \
-              --destination "us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee:server"     --context dir:///workspace/
+  "Base64Signature": "MEUCIAoXDplWGo0Tn2K1E/Ny2kiTHhdN1+i06d7Pu/FVN1EkAiEA2ggnIc7AVnPcmM5R/7w1hNshpOfpY0d7GJ3+bJJwcSA=",
+  "Payload": "eyJjcml0aWNhbCI6eyJpZGVudGl0eSI6eyJkb2NrZXItcmVmZXJlbmNlIjoiaW5kZXguZG9ja2VyLmlvL3NhbHJhc2hpZDEyMy9teWltYWdlIn0sImltYWdlIjp7ImRvY2tlci1tYW5pZmVzdC1kaWdlc3QiOiJzaGEyNTY6OWVjMDY1NjlmMWMxNjlkNGM1YjM4MGM2NGI4MDNkMjg3NDY4ZDk1NDI5ZGFiNGU0NDQ5ODQyZjkzYTI1MjA0OSJ9LCJ0eXBlIjoiY29zaWduIGNvbnRhaW5lciBpbWFnZSBzaWduYXR1cmUifSwib3B0aW9uYWwiOnsiZGV2LmNvc2lnbnByb2plY3QuY29zaWduL3B1YiI6IkxTMHRMUzFDUlVkSlRpQlFWVUpNU1VNZ1MwVlpMUzB0TFMwS1RVWnJkMFYzV1VoTGIxcEplbW93UTBGUldVbExiMXBKZW1vd1JFRlJZMFJSWjBGRk1YWTNVWEZtY0dsc1Z6ZE5NR2hRUzJnNVFuSmpkMU5qVDA1T01RbzVjbTFJYURSNVFWSlZWMnQ0VjBzMFQzTk9aMUZIWmxFck1UVlRZbkpyTUhSc2MxSTBjMmN5Tm1kaFRIVklaMUE0UzBaeldFSklOMFIzUFQwS0xTMHRMUzFGVGtRZ1VGVkNURWxESUV0RldTMHRMUzB0Q2ciLCJkZXYuY29zaWducHJvamVjdC5jb3NpZ24vc2lnYWxnIjoiRUNEU0FfUDI1Nl9TSEEyNTYifX0=",
+  "Cert": null,
+  "Chain": null,
+  "Bundle": null,
+  "RFC3161Timestamp": null
+}          
 ```
 
-#### CNCF Confidential Containers
+once deployed, the server will show the logs with the signature in the claims
 
-CNCF's [confidential-containers](https://github.com/confidential-containers) project is a variation of Confidential Space.
-
-For example, the same concepts Confidential Container employs such as attestation, verification and key release shares similar methodologies.
-
-Necessarily, the operator of the infrastructure is critically de-privleged from the workload:
-
-(from [Understanding the Confidential Containers Attestation Flow](https://www.redhat.com/en/blog/understanding-confidential-containers-attestation-flow)):
-
-```
-In a typical Kubernetes context, the infrastructure provider (such as a public cloud provider) is not considered a threat agent. It is a trusted actor of a Kubernetes deployment.
-
-In a confidential computing context, that assumption no longer applies and the infrastructure provider is a potential threat agent. Confidential Computing in general, and Confidential Containers in particular, try to protect Kubernetes workload owners from the infrastructure provider. Any software component that belongs to the infrastructure (e.g. the Kubernetes control plane) is untrusted.
-```
-
-At face, basic 'level' where Confidential Containers currently operates at is receiving entitlements to pull, decrypt, verify and run a container image that is deemed sensitive.
-
-Confidential Space on the other hand, delegates the ability to pull and run an image back to the Operator but the decryption keys or sensitive key material is done *within* the container is only released after attestation.
-
-With Confidential Space, the attestation service and access control is provided by the Cloud Provider (eg. Google) and not the Operator of the kubernetes cluster (i.,e the owner of the kubernetes cluster or GCP project).
-
-With Confidential Containers, the agent that _begins_ the attestation process is on the Node.  For example, the k8s Node that intends to run a sensitive container image is bootstrapped by a privleged `kata-agent` which inturn provides attestation statements to an external service that releases the decryption keys back to the agent that enables it to pull and run the sensitive image.
-
-Basically, one operates at the ability pull secrets to start a workload container image while other operates after an image is started and acquires secrets via attestation.  Ofcourse Confidential Containers can be extended to surface attestation _into_ the container as well (see `Azure Confidential Containers` below)
-
-* [CNCF Confidential Containers Architecture](https://github.com/confidential-containers/documentation/blob/main/architecture.md)
-* [How to use Confidential Containers without confidential hardware](https://www.redhat.com/en/blog/how-use-confidential-containers-without-confidential-hardware)
-* [Kata Containers](https://katacontainers.io/)
-* [Container Image Encryption & Decryption in the CoCo project](https://medium.com/kata-containers/confidential-containers-and-encrypted-container-images-fc4cdb332dec)
-* [OCICrypt Container Image KMS Provider](https://github.com/salrashid123//ocicrypt-kms-keyprovider)
-
-In summary, the basic common objectives are the same but the mechanism and levels at which they operate are different
-
-#### Azure Confidential Containers
-
-[Azure Confidential containers](https://learn.microsoft.com/en-us/azure/confidential-computing/confidential-containers) implements a similar flow to Confidential Space.  It does not seem to be bound to simple enforcement gating the ability to _download_ an image but specifies capabilities to perform key release based on the full container specification and environment at runtime.
-
-It seems the general flow with Azure is to first define a security policy specification which would include the target runtime specification using the [Azure confcom CLI tool](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-tutorial-deploy-confidential-containers-cce-arm#create-an-aci-container-group-arm-template) utility.   Specifically i think using something like [confcom.security_policy.load_policy_from_image_name()](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/azext_confcom/security_policy.py#L664) (see [test_confcom_image.py](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/azext_confcom/tests/latest/test_confcom_image.py)). 
-
-from azure docs:
-
-```
-When a security policy gets injected into the ARM Template, the corresponding sha256 hash of the decoded security policy gets printed to the command line. This sha256 hash can be used for verifying the hostdata field of the SEV-SNP Attestation Report and/or used for key release policies using MAA (Microsoft Azure Attestation) or mHSM (managed Hardware Security Module)
-```
-
-Given the specification, a final policy hash is generated using and injected into the Azure deploymentTemplate for a [Container Group](https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/samples/sample-template-output.json#L16)
-
-
-On deployment, the aggregate hash appears in an attestation statement from within the container provide by a sidecar services (see [Azure Attestation Token](https://learn.microsoft.com/en-us/azure/attestation/basic-concepts#attestation-token) (see [Attestation Token Examples](https://learn.microsoft.com/en-us/azure/attestation/attestation-token-examples) ),):
-
-```
-Confidential containers on Azure Container Instances provide a sidecar open source container for attestation and secure key release. This sidecar instantiates a web server, which exposes a REST API so that other containers can retrieve a hardware attestation report or a Microsoft Azure Attestation token via the POST method. The sidecar integrates with Azure Key vault for releasing a key to the container group after validation has been completed.
-```
-
-There are other capabilities of Azure:
-
-* [Attested TLS](https://github.com/microsoft/confidential-ai/blob/main/inference/README.md#client-setup)
-* [Confidential containers on Azure](https://learn.microsoft.com/en-us/azure/confidential-computing/confidential-containers)
-* [Confidential containers on Azure Container Instances](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-confidential-overview)
-* [Azure Container Instances Confidential Hello World](https://github.com/Azure-Samples/aci-confidential-hello-world)
-* [Microsoft.ContainerInstance containerGroups](https://learn.microsoft.com/en-us/azure/templates/microsoft.containerinstance/containergroups?pivots=deployment-language-arm-template)
-
+![images/test_signature.png](images/test_signature.png)
 
 #### Terraform Template
 

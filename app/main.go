@@ -2,32 +2,44 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 
 	"log"
 
 	"cloud.google.com/go/compute/metadata"
 	kms "cloud.google.com/go/kms/apiv1"
+	csclaims "github.com/salrashid123/confidential_space/claims"
 
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	"google.golang.org/genproto/googleapis/api/monitoredres"
 
+	// confidentialcomputingpb "cloud.google.com/go/confidentialcomputing/apiv1/confidentialcomputingpb"
+
 	"cloud.google.com/go/logging"
 	"cloud.google.com/go/pubsub"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/lestrrat/go-jwx/jwk"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -37,9 +49,10 @@ import (
 )
 
 var (
-	config                 = flag.String("config", "config.json", "Arbitrary config file")
-	attestation_token_path = flag.String("attestation_token_path", "/run/container_launcher/attestation_verifier_claims_token", "Path to Attestation Token file")
-	project_id             = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
+	config                        = flag.String("config", "config.json", "Arbitrary config file")
+	attestation_token_path        = flag.String("attestation_token_path", "/run/container_launcher/attestation_verifier_claims_token", "Path to Attestation Token file")
+	custom_attestation_token_path = flag.String("custom_attestation_token_path", "/run/container_launcher/teeserver.sock", "Path to Custom Attestation socket")
+	project_id                    = flag.String("project_id", "", "ProjectID for pubsub subscription and logging")
 
 	// for mtls certificates
 	default_ca      = flag.String("default_ca", "certs/root-ca-operator.crt", "Operator RootCA Chain (PEM)")
@@ -55,9 +68,12 @@ var (
 	collaborator2_tls_crt = flag.String("collaborator2_tls_crt", "certs/tee-collaborator2.crt", "Collaborator 2 TLS Certificate (PEM)")
 	collaborator2_tls_key = flag.String("collaborator2_tls_key", "certs/tee-collaborator2.key", "Collaborator 2 TLS KEY (PEM)")
 
+	marshal_custom_token_string_as_array = flag.Bool("marshal_custom_token_string_as_array", false, "Try to parse audience and eat_token as string array even if single string")
+
 	// map to hold all the users currently found and the number of times
 	// they've been sent
-	users = map[string]int32{}
+	users       = map[string]int32{}
+	instance_id string
 
 	logger *log.Logger
 	mu     sync.Mutex
@@ -69,10 +85,46 @@ const (
 	logName      = "cs-log"
 )
 
-type PostData struct {
+type connectRequest struct {
+	Uid string `json:"uid"`
+}
+
+type connectResponse struct {
+	Uid            string `json:"uid"`
+	AttestationJWT string `json:"attestation_jwt"`
+}
+
+type getSigningCertRequest struct {
+	CN string `json:"cn"`
+}
+
+type getSigningCertResponse struct {
+	Certificate    string `json:"certificate"`
+	AttestationJWT string `json:"attestation_jwt"`
+	SignedData     string `json:"signed_data"`
+	Signature      string `json:"signature"`
+}
+
+type incrementRequest struct {
 	Key           string `json:"key"`
 	Audience      string `json:"audience"`
 	EncryptedData string `json:"encrypted_data"`
+}
+
+type incrementResponse struct {
+	User  string `json:"user"`
+	Count int32  `json:"count"`
+}
+
+const (
+	TOKEN_TYPE_OIDC        string = "OIDC"
+	TOKEN_TYPE_UNSPECIFIED string = "UNSPECIFIED"
+)
+
+type customToken struct {
+	Audience  string   `json:"audience"`
+	Nonces    []string `json:"nonces"`
+	TokenType string   `json:"token_type"`
 }
 
 // contextKey is used to pass http middleware certificate details
@@ -82,6 +134,7 @@ const contextEventKey contextKey = "event"
 
 type event struct {
 	PeerCertificates []*x509.Certificate
+	EKM              string
 }
 
 func eventsMiddleware(h http.Handler) http.Handler {
@@ -136,8 +189,16 @@ func eventsMiddleware(h http.Handler) http.Handler {
 		// 	return
 		// }
 
+		ekm, err := r.TLS.ExportKeyingMaterial("my_nonce", nil, 32)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		logger.Printf("EKM my_nonce: %s\n", hex.EncodeToString(ekm))
+
 		event := &event{
 			PeerCertificates: r.TLS.PeerCertificates,
+			EKM:              hex.EncodeToString(ekm),
 		}
 		ctx := context.WithValue(r.Context(), contextEventKey, *event)
 		h.ServeHTTP(w, r.WithContext(ctx))
@@ -184,16 +245,185 @@ func incrementCounter(ctx context.Context, audience, key string, data []byte) (s
 	}
 }
 
-func posthandler(w http.ResponseWriter, r *http.Request) {
+// establish a TLS connection with the TEE
+//
+//	the response back to the client will contain the EKM value encoded in the eat_nonce
+//	the audience value just happens to be the client certificates hash
+//	  (yes, the aud: bit with client cert this isn't at all useful, i was just looking for a reason to use aud field)
+func connectHandler(w http.ResponseWriter, r *http.Request) {
 	val := r.Context().Value(contextKey("event")).(event)
+	var clientCertHash string
 	// note val.PeerCertificates[0] is the leaf
 	for _, c := range val.PeerCertificates {
 		h := sha256.New()
 		h.Write(c.Raw)
-		fmt.Printf("Client Certificate hash %s\n", base64.RawURLEncoding.EncodeToString(h.Sum(nil)))
+		clientCertHash = base64.StdEncoding.EncodeToString(h.Sum(nil))
 	}
 
-	var post PostData
+	logger.Println("Got Connect request")
+
+	var post connectRequest
+	err := json.NewDecoder(r.Body).Decode(&post)
+	if err != nil {
+		logger.Printf("Error parsing POST data")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	customTokenValue, err := getCustomAttestation(customToken{
+		Audience:  clientCertHash,
+		Nonces:    []string{val.EKM, clientCertHash},
+		TokenType: TOKEN_TYPE_OIDC,
+	})
+	if err != nil {
+		logger.Printf("     Error creating Custom JWT %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(&connectResponse{
+		Uid:            post.Uid,
+		AttestationJWT: customTokenValue,
+	})
+}
+
+// generate an RSA key inside the TEE and return a self signed cert
+// encode the public key's fingerprint as the eat_nonce value so the client knows
+// it was generated here
+func certHandler(w http.ResponseWriter, r *http.Request) {
+	val := r.Context().Value(contextKey("event")).(event)
+	var clientCertHash string
+	for _, c := range val.PeerCertificates {
+		h := sha256.New()
+		h.Write(c.Raw)
+		clientCertHash = base64.StdEncoding.EncodeToString(h.Sum(nil))
+	}
+
+	var post getSigningCertRequest
+	err := json.NewDecoder(r.Body).Decode(&post)
+	if err != nil {
+		logger.Printf("Error parsing POST data")
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	logger.Printf("Got POST Data  %v\n", post)
+
+	// generate an rsa key and certificate inside this instance
+	instanceKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		logger.Printf("Error generating rsa key %v\n", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pub := instanceKey.Public()
+	pubPEM := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "RSA PUBLIC KEY",
+			Bytes: x509.MarshalPKCS1PublicKey(pub.(*rsa.PublicKey)),
+		},
+	)
+
+	logger.Printf("generated Public Key \n%s\n", string(pubPEM))
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(time.Hour * 24 * 1)
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		logger.Printf("Error creating cert serial number %v\n", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// either issue a self-singed local x509 bound to this key (as shown below)
+	// or generate a csr and get a cert issued from any remote CA
+	//   for example gcp private CA: https://gist.github.com/salrashid123/f06eacd80a25611a7c322d8e6f99942f#gcp-private-ca
+	//                               https://github.com/salrashid123/tls_ak/blob/main/server/grpc_attestor.go#L534-L619
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization:       []string{"Acme Co"},
+			OrganizationalUnit: []string{"Enterprise"},
+			Locality:           []string{"Mountain View"},
+			Province:           []string{"California"},
+			Country:            []string{"US"},
+			CommonName:         post.CN,
+		},
+		NotBefore: notBefore,
+		NotAfter:  notAfter,
+		DNSNames:  []string{instance_id},
+		KeyUsage:  x509.KeyUsageDigitalSignature,
+		//ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	instanceCertificateDER, err := x509.CreateCertificate(rand.Reader, &template, &template, pub, instanceKey)
+	if err != nil {
+		logger.Printf("Error creating cert %v\n", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	certPEM := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: instanceCertificateDER,
+		},
+	)
+	logger.Printf("Instance Certificate: \n%s\n", certPEM)
+	instanceCertificate, err := x509.ParseCertificate(instanceCertificateDER)
+	if err != nil {
+		logger.Printf("Error creating cert  %v\n", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// calculate the certificate hash and place that into an eat_nonce value
+	hasher := sha256.New()
+	hasher.Write(instanceCertificate.Raw)
+	instanceCertificateHash := base64.StdEncoding.EncodeToString(hasher.Sum(nil))
+
+	logger.Printf("instance Certificate Hash %s\n", instanceCertificateHash)
+
+	customTokenValue, err := getCustomAttestation(customToken{
+		Audience:  clientCertHash,
+		Nonces:    []string{instanceCertificateHash},
+		TokenType: TOKEN_TYPE_OIDC,
+	})
+	if err != nil {
+		logger.Printf("     Error creating Custom JWT %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// create a test signature which the client can verify
+	dataToSign := "foo"
+	th := sha256.New()
+	th.Write([]byte(dataToSign))
+	signature, err := rsa.SignPKCS1v15(nil, instanceKey, crypto.SHA256, th.Sum(nil))
+	if err != nil {
+		logger.Printf("     Error from signing: %s\n", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(&getSigningCertResponse{
+		AttestationJWT: customTokenValue,
+		Certificate:    base64.StdEncoding.EncodeToString(instanceCertificate.Raw),
+		SignedData:     dataToSign,
+		Signature:      base64.StdEncoding.EncodeToString(signature),
+	})
+}
+
+// just increment the counter
+func incrementHandler(w http.ResponseWriter, r *http.Request) {
+	// val := r.Context().Value(contextKey("event")).(event)
+
+	var post incrementRequest
 	err := json.NewDecoder(r.Body).Decode(&post)
 	if err != nil {
 		logger.Printf("Error parsing POST data")
@@ -220,8 +450,48 @@ func posthandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, fmt.Sprintf("%s %d\n", u, c))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(&incrementResponse{
+		User:  u,
+		Count: c,
+	})
+}
+
+func getCustomAttestation(tokenRequest customToken) (string, error) {
+	httpClient := http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", *custom_attestation_token_path)
+			},
+		},
+	}
+
+	customJSON, err := json.Marshal(tokenRequest)
+	if err != nil {
+		return "", err
+	}
+
+	logger.Printf("Posting Custom Token %s\n", string(customJSON))
+
+	url := "http://localhost/v1/token"
+	resp, err := httpClient.Post(url, "application/json", strings.NewReader(string(customJSON)))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errorResponse, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("Error creating custom token %s", string(errorResponse))
+	}
+	tokenBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(tokenBytes), nil
 }
 
 func main() {
@@ -231,48 +501,59 @@ func main() {
 	ctx := context.Background()
 
 	// configure a logger client
+	log.SetOutput(os.Stdout)
+	log.SetOutput(os.Stderr)
 	logger = log.Default()
 
 	// try to derive the projectID from the default metadata server creds
 	creds, err := google.FindDefaultCredentials(ctx)
 	if err != nil {
-		logger.Fatalf("Error finding default credentials %v\n", err)
+		logger.Printf("Error finding default credentials %v\n", err)
+		os.Exit(1)
 	}
 
 	// derive the projectID to send logs and pubsub subscribe.  If specified in command line, use that.  Otherwise derive from creds
 	if *project_id == "" {
 		if creds.ProjectID == "" {
-			logger.Fatalf("error: --project_id parameter is null and unable to get projectID from credentials\n")
+			logger.Printf("error: --project_id parameter is null and unable to get projectID from credentials\n")
+			os.Exit(1)
 		}
 		*project_id = creds.ProjectID
 	}
 
 	// if we're running on GCE Conf-space, use the cloud logging api instead of stdout/stderr
+	// and read in instance variables
+
 	if metadata.OnGCE() {
 		logClient, err := logging.NewClient(ctx, *project_id)
 		if err != nil {
-			log.Fatalf("Failed to create client: %v", err)
+			logger.Printf("Failed to create client: %v", err)
+			os.Exit(1)
 		}
 		defer logClient.Close()
 
 		// derive the projectID, instanceID and zone
-		//  these three are used to 'label' the log lines back to the specific gce_instance logs
+		//  these three are used to 'label' the log lines back to the specific gce_instance logs.
+		//  use runtime.Goexit() from after setup to flush any deferred cloud logging log entries before exiting
 		p, err := metadata.ProjectID()
 		if err != nil {
-			log.Fatalf("Failed to get projectID from metadata server: %v", err)
+			logger.Printf("Failed to get projectID from metadata server: %v", err)
+			os.Exit(1)
 		}
-		i, err := metadata.InstanceID()
+		instance_id, err = metadata.InstanceID()
 		if err != nil {
-			log.Fatalf("Failed to get instanceID from metadata server: %v", err)
+			logger.Printf("Failed to get instanceID from metadata server: %v", err)
+			os.Exit(1)
 		}
 		z, err := metadata.Zone()
 		if err != nil {
-			log.Fatalf("Failed to get zone from metadata server: %v", err)
+			logger.Printf("Failed to get zone from metadata server: %v", err)
+			os.Exit(1)
 		}
 
 		m := make(map[string]string)
 		m["project_id"] = p
-		m["instance_id"] = i
+		m["instance_id"] = instance_id
 		m["zone"] = z
 		logger = logClient.Logger(logName, logging.CommonResource(
 			&monitoredres.MonitoredResource{
@@ -282,6 +563,7 @@ func main() {
 		)).StandardLogger(logging.Info)
 	}
 
+	// load a sample config file, this isn't really used at the moment
 	c1_cred, err := os.ReadFile(*config)
 	if err != nil {
 		logger.Printf("error reading  config file %v\n", err)
@@ -296,7 +578,7 @@ func main() {
 		runtime.Goexit()
 	}
 
-	logger.Printf("Config file %v\n", config)
+	logger.Printf("Loaded sample config file %v\n", config)
 
 	// print the attestation JSON
 	attestation_encoded, err := os.ReadFile(*attestation_token_path)
@@ -312,7 +594,7 @@ func main() {
 		runtime.Goexit()
 	}
 
-	gcpIdentityDoc := &Claims{}
+	gcpIdentityDoc := &csclaims.Claims{}
 
 	token, err := jwt.ParseWithClaims(string(attestation_encoded), gcpIdentityDoc, func(token *jwt.Token) (interface{}, error) {
 		keyID, ok := token.Header["kid"].(string)
@@ -323,13 +605,13 @@ func main() {
 			return key[0].Materialize()
 		}
 		return nil, errors.New("unable to find key")
-	})
+	}, jwt.WithLeeway(1*time.Second))
 	if err != nil {
 		logger.Printf("     Error parsing JWT %v", err)
 		runtime.Goexit()
 	}
 
-	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+	if claims, ok := token.Claims.(*csclaims.Claims); ok && token.Valid {
 		logger.Println("Attestation Claims: ")
 		printedClaims, err := json.MarshalIndent(claims, "", "  ")
 		if err != nil {
@@ -339,8 +621,102 @@ func main() {
 		logger.Printf("%s\n", string(printedClaims))
 	} else {
 		logger.Printf("error unmarshalling jwt token %v\n", err)
-		return
+		runtime.Goexit()
 	}
+
+	// create a custom token with an EKM value which we will send to httpbin
+	//  ofcourse httpbin cannot verify the EKM and JWT; this is just to demonstrate the flow
+
+	// first create a TLS connection since we need the EKM value
+	conn, err := tls.Dial("tcp", "httpbin.org:443", &tls.Config{})
+	if err != nil {
+		logger.Printf("Error connecting to remote server %v\n", err)
+		runtime.Goexit()
+	}
+	cs := conn.ConnectionState()
+	ekm, err := cs.ExportKeyingMaterial("my_nonce", nil, 32)
+	if err != nil {
+		logger.Printf("Error extracting ekm %v\n", err)
+		runtime.Goexit()
+	}
+	logger.Printf("EKM my_nonce: %s\n", hex.EncodeToString(ekm))
+
+	// now issue the custom JWT with the EKM value and any other random string; note eat_nonce needs to be of a minimum size (i think 16bytes?)
+	customTokenValue, err := getCustomAttestation(customToken{
+		Audience:  "https://httpbin.org",
+		Nonces:    []string{hex.EncodeToString(ekm), "0000000000000000001"},
+		TokenType: TOKEN_TYPE_OIDC,
+	})
+	if err != nil {
+		logger.Printf("     Error creating Custom JWT %v", err)
+		runtime.Goexit()
+	}
+
+	jwt.MarshalSingleStringAsArray = *marshal_custom_token_string_as_array
+
+	// parse it back (this isn't ofcourse necessary, this just shows what a remote server should do with the bearer token)
+	customtokenParsed, err := jwt.ParseWithClaims(customTokenValue, gcpIdentityDoc, func(token *jwt.Token) (interface{}, error) {
+		keyID, ok := token.Header["kid"].(string)
+		if !ok {
+			return nil, errors.New("expecting JWT header to have string kid")
+		}
+		if key := jwtSet.LookupKeyID(keyID); len(key) == 1 {
+			return key[0].Materialize()
+		}
+		return nil, errors.New("unable to find key")
+	}, jwt.WithLeeway(1*time.Second))
+	if err != nil {
+		logger.Printf("     Error parsing JWT %v", err)
+		runtime.Goexit()
+	}
+
+	if claims, ok := customtokenParsed.Claims.(*csclaims.Claims); ok && token.Valid {
+		logger.Println("Attestation Claims: ")
+		printedClaims, err := json.MarshalIndent(claims, "", "  ")
+		if err != nil {
+			logger.Printf(err.Error())
+		}
+		logger.Printf(">>>>>>>>>>  Custom JWT %s\n", string(printedClaims))
+	} else {
+		logger.Printf("error unmarshalling jwt token %v\n", err)
+		runtime.Goexit()
+	}
+
+	// now that we have the custom JWT, we can send the JWT as a bearer token to the remote site and print the results.
+	//  since w'ere sending it to httpbin, the results will be an echo of the headers we sent to it
+
+	tr := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+	client := http.Client{
+		Transport: tr,
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://httpbin.org/get", nil)
+	if err != nil {
+		logger.Printf("error creating a request to remote server %v\n", err)
+		runtime.Goexit()
+	}
+
+	// do something here with the ekm value before the request is sent but after the connection is setup...
+	//   like create a jwt with the ekm as claim, send it as a bearer header token..
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", customTokenValue))
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Printf("error submitting request to httpbin %v\n", err)
+		runtime.Goexit()
+	}
+
+	htmlData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Printf("error reading response body %v\n", err)
+		runtime.Goexit()
+	}
+	defer resp.Body.Close()
+	logger.Printf("Status from httpbin: %s\n", resp.Status)
+	logger.Printf("Response from httpbin %s\n", string(htmlData))
 
 	//  Start listening to pubsub messages on background
 	pubsubClient, err := pubsub.NewClient(ctx, *project_id)
@@ -351,47 +727,59 @@ func main() {
 	defer pubsubClient.Close()
 
 	logger.Printf("Beginning subscription: %s\n", subscription)
+	quit := make(chan bool)
 	sub := pubsubClient.Subscription(subscription)
 	go func(ctx context.Context) {
-		err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-			logger.Printf("Got MessageID ID: %s\n", msg.ID)
-			key, keyok := msg.Attributes["key"]
-			audience, audienceok := msg.Attributes["audience"]
-			if keyok && audienceok {
-				u, c, err := incrementCounter(ctx, audience, key, msg.Data)
+		for {
+			select {
+			case <-quit:
+				return
+			default:
+				err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+					logger.Printf("Got MessageID ID: %s\n", msg.ID)
+					key, keyok := msg.Attributes["key"]
+					audience, audienceok := msg.Attributes["audience"]
+					if keyok && audienceok {
+						u, c, err := incrementCounter(ctx, audience, key, msg.Data)
+						if err != nil {
+							logger.Printf("error incrementing counter: %v\n", err)
+						} else {
+							logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", u, c)
+						}
+					} else {
+						logger.Printf("key or audience attribute not sent; skipping message processing\n")
+					}
+					msg.Ack()
+				})
 				if err != nil {
-					logger.Printf("error incrementing counter: %v\n", err)
-				} else {
-					logger.Printf(">>>>>>>>>>> Found user [%s] count  %d\n", u, c)
+					logger.Printf("Error reading pubsub subscription %v\n", err)
+					return
 				}
-			} else {
-				logger.Printf("key or audience attribute not sent; skipping message processing\n")
 			}
-			msg.Ack()
-		})
-		if err != nil {
-			logger.Printf("Error reading pubsub subscription %v\n", err)
-			runtime.Goexit()
 		}
 	}(ctx)
 
 	// start http server on main
 	router := mux.NewRouter()
-	router.Methods(http.MethodPost).Path("/").HandlerFunc(posthandler)
+	router.Methods(http.MethodPost).Path("/connect").HandlerFunc(connectHandler)
+	router.Methods(http.MethodPost).Path("/cert").HandlerFunc(certHandler)
+	router.Methods(http.MethodPost).Path("/increment").HandlerFunc(incrementHandler)
 	router.Methods(http.MethodGet).Path("/healthz").HandlerFunc(healthhandler)
 
 	// load default server certs
 	default_server_certs, err := tls.LoadX509KeyPair(*default_tls_crt, *default_tls_key)
 	if err != nil {
 		logger.Printf("Error loading default certificates %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
 
 	// load the CA client cert and server certificates
 	// load rootCA for CA_1
-	client1_root, err := ioutil.ReadFile(*collaborator1_ca)
+	client1_root, err := os.ReadFile(*collaborator1_ca)
 	if err != nil {
 		logger.Printf("Error loading collaborator1 ca certificate %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
 
@@ -399,9 +787,10 @@ func main() {
 	client1_root_pool.AppendCertsFromPEM(client1_root)
 
 	// load rootCA for CA_2
-	client2_root, err := ioutil.ReadFile(*collaborator2_ca)
+	client2_root, err := os.ReadFile(*collaborator2_ca)
 	if err != nil {
 		logger.Printf("Error loading collaborator2 ca certificate %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
 
@@ -413,12 +802,14 @@ func main() {
 	server1_cert, err := tls.LoadX509KeyPair(*collaborator1_tls_crt, *collaborator1_tls_key)
 	if err != nil {
 		logger.Printf("Error loading collaborator1 server certificates %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
 
 	server2_cert, err := tls.LoadX509KeyPair(*collaborator2_tls_crt, *collaborator2_tls_key)
 	if err != nil {
 		logger.Printf("Error loading collaborator2 server certificates %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
 
@@ -484,8 +875,9 @@ func main() {
 	err = server.ListenAndServeTLS("", "")
 	if err != nil {
 		logger.Printf("Error Starting TLS Server %v\n", err)
+		quit <- true
 		runtime.Goexit()
 	}
-
+	quit <- true
 	logger.Println("Shutting down server")
 }
