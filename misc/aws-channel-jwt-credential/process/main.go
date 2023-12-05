@@ -207,8 +207,9 @@ func main() {
 	// also embed the ekm value.
 	//  by convention, i'm setting eat_nonce[0]=ekm and eat_nonce[1]=sha256(tokenString)
 	tts := &tk.CustomToken{
-		Audience: cfg.flAudience,
-		Nonces:   []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		Audience:  cfg.flAudience,
+		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		TokenType: tk.TOKEN_TYPE_OIDC,
 	}
 
 	// now get the token
@@ -218,11 +219,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// tts2 := customToken{
-	// 	Audience: cfg.flAudience,
-	// 	Nonces:   []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
-	// }
-	// customTokenValue, err = getCustomAttestation(tts2)
+	// customTokenValue, err = getCustomAttestation(tts)
 	// if err != nil {
 	// 	fmt.Fprintf(os.Stderr, "aws-channel-jwt-process-credential:  Error creating Custom JWT %v", err)
 	// 	os.Exit(1)
@@ -280,12 +277,7 @@ func main() {
 	fmt.Println(string(m))
 }
 
-type customToken struct {
-	Audience string   `json:"audience"`
-	Nonces   []string `json:"nonces"` // each nonce must be min 64bits
-}
-
-func getCustomAttestation(tokenRequest customToken) (string, error) {
+func getCustomAttestation(tokenRequest tk.CustomToken) (string, error) {
 	httpClient := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {

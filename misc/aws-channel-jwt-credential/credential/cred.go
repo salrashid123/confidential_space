@@ -270,12 +270,7 @@ func (s *EKMProvider) ExpiresAt() time.Time {
 	return s.expiration
 }
 
-type customToken struct {
-	Audience string   `json:"audience"`
-	Nonces   []string `json:"nonces"` // each nonce must be min 64bits
-}
-
-func (s *EKMProvider) getCustomAttestation(tokenRequest customToken) (string, error) {
+func (s *EKMProvider) getCustomAttestation(tokenRequest tk.CustomToken) (string, error) {
 	httpClient := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
