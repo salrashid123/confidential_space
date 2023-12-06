@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/aws/aws-sdk-go v1.47.3
 	github.com/golang-jwt/jwt/v5 v5.0.0
-	github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
+	//github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
 )
 
 require (
@@ -17,4 +17,4 @@ require (
 	github.com/salrashid123/confidential_space/claims v0.0.0-20231113123744-44f929093c61 // indirect
 )
 
-replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken
+//replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken

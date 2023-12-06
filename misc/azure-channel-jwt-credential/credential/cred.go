@@ -14,16 +14,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 
 	jwt "github.com/golang-jwt/jwt/v5"
-
 	// if you want to build and run this in confidential space, remove the test token
 	// and use func (s *EKMProvider) getCustomAttestation(tokenRequest customToken)
-	tk "github.com/salrashid123/confidential_space/misc/testtoken"
+	//tk "github.com/salrashid123/confidential_space/misc/testtoken"
 )
 
 type tokenPayload struct {
@@ -54,6 +54,17 @@ const (
 	ISO8601 = "2006-01-02T15:04:05-0700"
 	RFC3339 = "2006-01-02T15:04:05Z07:00"
 )
+
+const (
+	TOKEN_TYPE_OIDC        string = "OIDC"
+	TOKEN_TYPE_UNSPECIFIED string = "UNSPECIFIED"
+)
+
+type customToken struct {
+	Audience  string   `json:"audience"`
+	Nonces    []string `json:"nonces"`
+	TokenType string   `json:"token_type"`
+}
 
 type EKMAZCredentialOptions struct {
 	azcore.ClientOptions
@@ -174,23 +185,28 @@ func (c *EKMAZCredential) GetToken(ctx context.Context, opts policy.TokenRequest
 	// this will ensure the jwt we sent in matches what was actually in use inside conf_space
 	// also embed the ekm value.
 	//  by convention, i'm setting eat_nonce[0]=ekm and eat_nonce[1]=sha256(tokenString)
-	tts := &tk.CustomToken{
-		Audience:  c.copts.Audience,
-		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
-		TokenType: tk.TOKEN_TYPE_OIDC,
-	}
+	// tts := &tk.CustomToken{
+	// 	Audience:  c.copts.Audience,
+	// 	Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+	// 	TokenType: tk.TOKEN_TYPE_OIDC,
+	// }
 
-	// now get the token using the fake testprovider
-	customTokenValue, err := tk.GetCustomAttestation(tts)
-	if err != nil {
-		return azcore.AccessToken{}, fmt.Errorf("ekm-jwt-credential:  Error creating Custom JWT %v", err)
-	}
-
-	// if you deploy to prod, use the following on confidential space
-	// customTokenValue, err := getCustomAttestation(tts)
+	// // now get the token using the fake testprovider
+	// customTokenValue, err := tk.GetCustomAttestation(tts)
 	// if err != nil {
 	// 	return azcore.AccessToken{}, fmt.Errorf("ekm-jwt-credential:  Error creating Custom JWT %v", err)
 	// }
+
+	// if you deploy to prod, use the following on confidential space
+	tts := customToken{
+		Audience:  c.copts.Audience,
+		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+		TokenType: TOKEN_TYPE_OIDC,
+	}
+	customTokenValue, err := c.getCustomAttestation(tts)
+	if err != nil {
+		return azcore.AccessToken{}, fmt.Errorf("ekm-jwt-credential:  Error creating Custom JWT %v", err)
+	}
 
 	// create a request and supply the token_jwt and attestation_jwt
 	tt := &tokenRequest{
@@ -233,6 +249,33 @@ func (c *EKMAZCredential) GetToken(ctx context.Context, opts policy.TokenRequest
 		ExpiresOn: t,
 	}
 	return r, nil
+}
+
+func (c *EKMAZCredential) getCustomAttestation(tokenRequest customToken) (string, error) {
+	httpClient := http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", c.copts.AttestationTokenPath)
+			},
+		},
+	}
+
+	customJSON, err := json.Marshal(tokenRequest)
+	if err != nil {
+		return "", err
+	}
+
+	url := "http://localhost/v1/token"
+	resp, err := httpClient.Post(url, "application/json", strings.NewReader(string(customJSON)))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	tokenbytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(tokenbytes), nil
 }
 
 func thumbprint(cert *x509.Certificate) []byte {

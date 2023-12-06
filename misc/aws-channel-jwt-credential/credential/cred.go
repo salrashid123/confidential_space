@@ -20,10 +20,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/sts"
 
 	jwt "github.com/golang-jwt/jwt/v5"
-
 	// if you want to build and run this in confidential space, remove the test token
 	// and use func (s *EKMProvider) getCustomAttestation(tokenRequest customToken)
-	tk "github.com/salrashid123/confidential_space/misc/testtoken"
+	//tk "github.com/salrashid123/confidential_space/misc/testtoken"
 )
 
 const (
@@ -61,6 +60,17 @@ type processCredentialsResponse struct {
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
+}
+
+const (
+	TOKEN_TYPE_OIDC        string = "OIDC"
+	TOKEN_TYPE_UNSPECIFIED string = "UNSPECIFIED"
+)
+
+type customToken struct {
+	Audience  string   `json:"audience"`
+	Nonces    []string `json:"nonces"`
+	TokenType string   `json:"token_type"`
 }
 
 const (
@@ -193,24 +203,29 @@ func (s *EKMProvider) Retrieve() (creds.Value, error) {
 	// this will ensure the jwt we sent in matches what was actually in use inside conf_space
 	// also embed the ekm value.
 	//  by convention, i'm setting eat_nonce[0]=ekm and eat_nonce[1]=sha256(tokenString)
-	tts := &tk.CustomToken{
+	// tts := &tk.CustomToken{
+	// 	Audience:  s.cfg.Audience,
+	// 	Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
+	// 	TokenType: tk.TOKEN_TYPE_OIDC,
+	// }
+
+	// // now get the token using the fake testprovider
+	// customTokenValue, err := tk.GetCustomAttestation(tts)
+	// if err != nil {
+	// 	return creds.Value{}, fmt.Errorf("ekm-jwt-credential:  Error creating Custom JWT %v", err)
+	// }
+
+	tts := customToken{
 		Audience:  s.cfg.Audience,
 		Nonces:    []string{hex.EncodeToString(ekm), hex.EncodeToString(bs)},
-		TokenType: tk.TOKEN_TYPE_OIDC,
+		TokenType: TOKEN_TYPE_OIDC,
 	}
 
-	// now get the token using the fake testprovider
-	customTokenValue, err := tk.GetCustomAttestation(tts)
+	//if you deploy to prod, use the following on confidential space
+	customTokenValue, err := s.getCustomAttestation(tts)
 	if err != nil {
 		return creds.Value{}, fmt.Errorf("ekm-jwt-credential:  Error creating Custom JWT %v", err)
 	}
-
-	// if you deploy to prod, use the following on confidential space
-	// customTokenValue, err := getCustomAttestation(tts)
-	// if err != nil {
-	// 	fmt.Fprintf(os.Stderr, "ekm-jwt-credential:  Error creating Custom JWT %v", err)
-	// 	os.Exit(1)
-	// }
 
 	// create a request and supply the token_jwt and attestation_jwt
 	tt := &tokenRequest{
@@ -270,7 +285,7 @@ func (s *EKMProvider) ExpiresAt() time.Time {
 	return s.expiration
 }
 
-func (s *EKMProvider) getCustomAttestation(tokenRequest tk.CustomToken) (string, error) {
+func (s *EKMProvider) getCustomAttestation(tokenRequest customToken) (string, error) {
 	httpClient := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {

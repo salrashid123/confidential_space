@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/google/uuid v1.3.1
-	github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
+	//github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
 )
 
 require github.com/golang-jwt/jwt/v5 v5.0.0
@@ -17,4 +17,4 @@ require (
 	github.com/salrashid123/confidential_space/claims v0.0.0-20231113123744-44f929093c61 // indirect
 )
 
-replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken
+//replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken

@@ -5,7 +5,7 @@ go 1.21
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.9.0
 	github.com/golang-jwt/jwt/v5 v5.0.0
-	github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
+	//github.com/salrashid123/confidential_space/misc/testtoken v0.0.0
 )
 
 require (
@@ -19,4 +19,4 @@ require (
 	golang.org/x/text v0.13.0 // indirect
 )
 
-replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken
+//replace github.com/salrashid123/confidential_space/misc/testtoken => ../../testtoken
