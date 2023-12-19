@@ -1,9 +1,19 @@
 steps:
 
-  # bazel 6.2.1
-  - name: gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a
+
+  - name: gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd
     id: build
-    args: ['run', '--platforms=@io_bazel_rules_go//go/toolchain:linux_amd64', ':server']
+    args: ['--output_base=/workspace/build_output', 'build', ':tar-oci-index']
+
+  # - name: gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd
+  #   id: push
+  #   args: ['--output_base=/workspace/build_output', 'run',  ':push-image']
+  #   waitFor: ['build']
+
+  - name: gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd
+    id: oci-archive
+    args: ['--output_base=/workspace/build_output', 'cquery', '--output=files', ':tar-oci-index']
+    waitFor: ['build']
 
   - name: 'gcr.io/cloud-builders/gcloud-slim@sha256:e72dd707225c740a2345cf09037bcb1239df8ebb1e714d0d8fdf81efdb02b14c'
     id: token
@@ -12,11 +22,7 @@ steps:
     - '-c'
     - |
       gcloud auth print-access-token > /workspace/token
-
-  # - name: gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a
-  #   id: push
-  #   args: ['run', '--define=PROJECT_ID=$PROJECT_ID', '--platforms=@io_bazel_rules_go//go/toolchain:linux_amd64', ':push_image']
-  #   waitFor: ['build', 'token']
+    waitFor: ['-']
 
   # skopeo 1.11.2
   - name: quay.io/containers/skopeo@sha256:b6090d267840441647186a285549a5186d83f32f13b9b33bc77b89e30c52afb0
@@ -25,8 +31,8 @@ steps:
     args:
     - '-c'
     - |
-      skopeo copy --dest-registry-token `cat /workspace/token` --digestfile /workspace/hash.txt --preserve-digests   docker-daemon:us-central1-docker.pkg.dev/builder-project/repo1/tee:server docker://us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
-    waitFor: ['build', 'token']
+      skopeo copy --dest-registry-token `cat /workspace/token` --all -f oci  --digestfile /workspace/hash.txt --preserve-digests   oci-archive:bazel-out/k8-fastbuild/bin/tar-oci-index/tarball.tar docker://us-central1-docker.pkg.dev/$PROJECT_ID/repo1/tee:server
+    waitFor: ['build', 'oci-archive', 'token']
 
   - name: docker.io/alpine@sha256:124c7d2707904eea7431fffe91522a01e5a861a624ee31d03372cc1d138a3126
     id: finalize_name
@@ -72,62 +78,6 @@ steps:
     - |
       cosign attest  --tlog-upload=false --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 --predicate=/workspace/predicates.json -y $(cat /workspace/name_hash.txt)
     waitFor: ['finalize_name','sign_kms']
-
-  # - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
-  #   id: sign_oidc
-  #   env:
-  #   - REGISTRY=us-central1-docker.pkg.dev
-  #   - TUF_ROOT=/tmp    
-  #   - COSIGN_EXPERIMENTAL=1
-  #   - GOOGLE_SERVICE_ACCOUNT_NAME=cosign@$PROJECT_ID.iam.gserviceaccount.com  
-  #   entrypoint: 'sh'
-  #   args:
-  #   - '-c'
-  #   - |
-  #     cosign sign   --tlog-upload=false --annotations=key1=value1 -a dev.cosignproject.cosign/sigalg=ECDSA_P256_SHA256 -a dev.cosignproject.cosign/pub=$(cat /workspace/kms_pub.txt) -f -y $(cat /workspace/name_hash.txt)
-  #   waitFor: ['attestations']
-
-  # - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
-  #   id: attest_oidc
-  #   env:
-  #   - REGISTRY=us-central1-docker.pkg.dev
-  #   - TUF_ROOT=/tmp    
-  #   - COSIGN_EXPERIMENTAL=1
-  #   - GOOGLE_SERVICE_ACCOUNT_NAME=cosign@$PROJECT_ID.iam.gserviceaccount.com  
-  #   entrypoint: 'sh'
-  #   args:
-  #   - '-c'
-  #   - |
-  #     cosign attest  --tlog-upload=false -f --predicate=/workspace/predicates.json -y  $(cat /workspace/name_hash.txt)
-  #   waitFor: ['sign_oidc']    
-
-  # note, syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b is the *debug* image because it provides a shell
-  - name: docker.io/anchore/syft@sha256:7a0f80ba92423d6771da80c4b7d3d051759ed2b3f66a85a9922d448ea6eff60b
-    id: generate_sbom
-    entrypoint: 'sh'
-    args:
-    - '-c'
-    - |    
-      /syft packages $(/busybox/cat /workspace/name_hash.txt) -o=spdx --file=/workspace/latest.spdx
-    waitFor: ['finalize_name']
-
-  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
-    id: attach_sbom
-    entrypoint: 'sh'
-    args:
-    - '-c'
-    - |
-      cosign attach sbom --sbom=/workspace/latest.spdx $(cat /workspace/name_hash.txt)
-    waitFor: ['generate_sbom']
-
-  - name: gcr.io/projectsigstore/cosign@sha256:280b47054876d415f66a279e666e35157cae6881f3538599710290c70bb75369
-    id: sign_sbom 
-    entrypoint: 'sh'
-    args:
-    - '-c'
-    - |
-      cosign sign  --tlog-upload=false --annotations=commit_sha=$COMMIT_SHA --attachment=sbom --key gcpkms://projects/$PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 $(cat /workspace/name_hash.txt)
-    waitFor: ['attach_sbom']
 
 serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/cosign@$PROJECT_ID.iam.gserviceaccount.com'
 options:

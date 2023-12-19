@@ -1,8 +1,7 @@
 load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
-load("@io_bazel_rules_docker//go:image.bzl", "go_image")
-load("@io_bazel_rules_docker//container:container.bzl", "container_image", "container_push")
-load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", "oci_tarball", "oci_image_index")
+load("@bazel_gazelle//:def.bzl", "gazelle")
 
 gazelle(name = "gazelle")
 
@@ -15,49 +14,6 @@ go_binary(
     visibility = ["//visibility:public"],
     goos = "linux", 
     goarch = "amd64",     
-)
-
-pkg_tar(
-    name = "certs_bundle",
-    srcs = [
-        "//certs:root-ca-operator.crt",
-        "//certs:tee-operator.crt",
-        "//certs:tee-operator.key",
-        "//certs:root-ca-collaborator1.crt",
-        "//certs:tee-collaborator1.crt",
-        "//certs:tee-collaborator1.key",
-        "//certs:root-ca-collaborator2.crt",
-        "//certs:tee-collaborator2.crt",
-        "//certs:tee-collaborator2.key",
-    ],
-    package_dir = "/certs",
-)
-
-container_image(
-    name = "server",
-    base = "@distroless_base//image",
-    entrypoint = ["/server"],
-    cmd = [],
-    labels = {
-        "tee.launch_policy.allow_cmd_override": "false",
-        "tee.launch_policy.log_redirect": "always",
-    },    
-    files = [
-        ":main",
-        ":config.json",
-    ],
-    tars = [":certs_bundle"],
-    ports = ["8081"],
-    repository = "us-central1-docker.pkg.dev/builder-project/repo1/tee",
-)
-
-container_push(
-   name = "push_image",
-   image = ":server",
-   format = "Docker",
-   registry = "us-central1-docker.pkg.dev",
-   repository = "$(PROJECT_ID)/repo1/tee",
-   tag = "server",
 )
 
 go_library(
@@ -84,3 +40,76 @@ go_library(
     ],
 )
 
+pkg_tar(
+    name = "certs_bundle",
+    srcs = [
+        "//certs:root-ca-operator.crt",
+        "//certs:tee-operator.crt",
+        "//certs:tee-operator.key",
+        "//certs:root-ca-collaborator1.crt",
+        "//certs:tee-collaborator1.crt",
+        "//certs:tee-collaborator1.key",
+        "//certs:root-ca-collaborator2.crt",
+        "//certs:tee-collaborator2.crt",
+        "//certs:tee-collaborator2.key",
+    ],
+    package_dir = "/certs",
+)
+
+pkg_tar(
+    name = "config_bundle",
+    srcs = [
+        ":config.json",
+    ],
+    package_dir = "/",
+)
+
+pkg_tar(
+    name = "app-tar",
+    srcs = [":main"],
+    package_dir = "/",
+)
+
+oci_image(
+    name = "server-image",
+    base = "@distroless_base",
+    tars = [":certs_bundle", ":config_bundle", ":app-tar"],
+    labels = {
+        "tee.launch_policy.allow_cmd_override": "false",
+        "tee.launch_policy.log_redirect": "always",        
+    },    
+    entrypoint = ["/server"],
+    cmd = [],
+    env = {},
+    exposed_ports = [
+        "8081/tcp",
+    ],    
+)
+
+oci_tarball(
+    name = "tar-docker",
+    image = "server-image",
+    format = "docker",
+    repo_tags = ["us-central1-docker.pkg.dev/builder-project/repo1/tee"],
+)
+
+oci_image_index(
+    name = "app-index",
+    images = [
+        ":server-image",
+    ]
+)
+
+oci_tarball(
+    name = "tar-oci-index",
+    image = ":app-index",
+    format = "oci",
+    repo_tags = ["us-central1-docker.pkg.dev/builder-project/repo1/tee"],
+)
+
+oci_push(
+    name = "push-image",
+    image = ":server-image",
+    repository = "us-central1-docker.pkg.dev/$(PROJECT_ID)/repo1/tee",
+    remote_tags = ["server"]
+)

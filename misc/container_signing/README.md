@@ -9,13 +9,13 @@ There are several alternatives where the signature checks happen during runtime 
 
   If a collaborator wants to ensure that the operator or some third party submitted/attested the container+hash, the collaborator can "just verify" that was done prior to authorizing the container for KMS access.
 
-  This would require the workflow pipleine for each collaborator to get notification of a new candidate image for deployment, then check if the requsite signatures were provided and only then authorize KMS access specifically for that image.
+  This would require the workflow pipleine for each collaborator to get notification of a new candidate image for deployment, then check if the requisite signatures were provided and only then authorize KMS access specifically for that image.
 
   The specific workflows involved for the notification and verification of candidate containers is implementation dependent and is not covered here.
 
   If `sigstore/cosign` is used the collaborator would need to iterate over the public keys for each attestor he/she is interested in and then once satisfied, proceed to authorize the image.   The section below describes using cosign cli and api to verify containers.
 
-  If [gcp binary authorization](https://cloud.google.com/binary-authorization) is used by the operator as the "signature system", the collaborator can verify N parties provided signatures by invoking the operators binary authorization api, then reading and verifying which parties provided signatures (eg the collaborator would run `gcloud beta container binauthz attestations list --attestor=myattestor --project=$OPERATOR_PROJECT_ID` prior to authorization). A more formal confirmation that signatures were provided could be if the operator enabled GCP Audit Logs for the binaryauthorization API.  If that step is done, each attestation is encoded in the operators audit log permanently.  [Here](https://gist.github.com/salrashid123/2ca607fee4977244136cb1ae0d37173f) is an example of Binary Authorization Audit Log.  Once in audit log, the collabortors can subscribe to events via GCP [eventarc](https://cloud.google.com/eventarc/docs/event-driven-architectures) which can notify of any new signatures or changes.   
+  If [gcp binary authorization](https://cloud.google.com/binary-authorization) is used by the operator as the "signature system", the collaborator can verify N parties provided signatures by invoking the operators binary authorization api, then reading and verifying which parties provided signatures (eg the collaborator would run `gcloud beta container binauthz attestations list --attestor=myattestor --project=$OPERATOR_PROJECT_ID` prior to authorization). A more formal confirmation that signatures were provided could be if the operator enabled GCP Audit Logs for the binary authorization API.  If that step is done, each attestation is encoded in the operators audit log permanently.  [Here](https://gist.github.com/salrashid123/2ca607fee4977244136cb1ae0d37173f) is an example of Binary Authorization Audit Log.  Once in audit log, the collaborators can subscribe to events via GCP [eventarc](https://cloud.google.com/eventarc/docs/event-driven-architectures) which can notify of any new signatures or changes.   
 
 
   This allows for multiple, rapid IAM binding at the resource per image without defining a new pool.
@@ -23,9 +23,9 @@ There are several alternatives where the signature checks happen during runtime 
 
 - `late binding`
 
-  With late binding, the cotntainer on startup checks for the requsite signatures during the applications `init()` stage.  
+  With late binding, the container on startup checks for the requisite signatures during the applications `init()` stage.  
   
-  In other words, the acutual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system or simply read the signatures passed as startup arguments to the container runtime.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
+  In other words, the actual container code uses a set of public keys to verify the image hash it is running with has a valid signature against it either with cosign or in gcp's binary authorization system or simply read the signatures passed as startup arguments to the container runtime.  An image could derive its own image_hash by  locally verifying its JWT Attestation token.
   
   This mechanism is described in detail below
 
@@ -42,16 +42,15 @@ To check the cosign signatures and attestations, install cosign and then:
 ## export BUILDER_PROJECT_ID=`gcloud config get-value core/project`
 ## export BUILDER_PROJECT_NUMBER=`gcloud projects describe $BUILDER_PROJECT_ID --format='value(projectNumber)'`
 ## gcloud auth application-default login
-$ cosign tree      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 
 
-📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 
-└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/builder-395303/repo1/tee:sha256-1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 .att
-   ├── 🍒 sha256:833ec1483ed02051d57dc5ea62e0bec0e89661644574fc8c06033634bd0f9c53
-   └── 🍒 sha256:93e9f45b05d3afee9f47202155503dcb874d9b423451b72cd9f90403233012bd
-└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/builder-395303/repo1/tee:sha256-1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 .sig
-   └── 🍒 sha256:87c0a76024369681d1130ba11234a51f08cdd92356201911fe5f28c69316985e
-└── 📦 SBOMs for an image tag: us-central1-docker.pkg.dev/builder-395303/repo1/tee:sha256-1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 .sbom
-   └── 🍒 sha256:f225cfc0597e1627e1755a51ab8570147a2eeaab9deb1b33160577c3d571f3c7
+$ export IMAGE_HASH=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849
+$ cosign tree  $IMAGE_HASH     
+
+📦 Supply Chain Security Related artifacts for an image: us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849
+└── 💾 Attestations for an image tag: us-central1-docker.pkg.dev/builder-395303/repo1/tee:sha256-60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849.att
+   └── 🍒 sha256:2008211259d8021aaa8466cec423de1e64e312c38c4c76cf22ad1bff2ed352c4
+└── 🔐 Signatures for an image tag: us-central1-docker.pkg.dev/builder-395303/repo1/tee:sha256-60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849.sig
+   └── 🍒 sha256:561222396fbe725acde46e728adc5aa8069942c201787a22ce6fc286ecc96f0a
 ```
 
 which will exist as additional artifacts in the registry
@@ -68,12 +67,11 @@ gcloud kms keys versions get-public-key 1  \
 # you can also reference the kms key via url instead of using a local one
 #   for that use --key gcpkms://projects/$BUILDER_PROJECT_ID/locations/global/keyRings/cosignkr/cryptoKeys/key1/cryptoKeyVersions/1 
 
-cosign verify --key /tmp/kms_pub.pem --insecure-ignore-tlog=true  \
-   us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646   | jq '.'
+cosign verify --key /tmp/kms_pub.pem --insecure-ignore-tlog=true  $IMAGE_HASH   | jq '.'
 
 # the output for the verify will look like:
 
-Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646  --
+Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -84,7 +82,7 @@ The following checks were performed on each of these signatures:
         "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 "
+        "docker-manifest-digest": "sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849"
       },
       "type": "cosign container image signature"
     },
@@ -99,7 +97,7 @@ The following checks were performed on each of these signatures:
 
 ## inspect the signature itself
 
-$ skopeo inspect --raw docker://$(cosign triangulate --type=signature $IMAGE_DIGEST) | jq -r
+$ skopeo inspect --raw docker://$(cosign triangulate --type=signature $IMAGE_HASH) | jq -r
 
 {
   "schemaVersion": 2,
@@ -107,15 +105,15 @@ $ skopeo inspect --raw docker://$(cosign triangulate --type=signature $IMAGE_DIG
   "config": {
     "mediaType": "application/vnd.oci.image.config.v1+json",
     "size": 233,
-    "digest": "sha256:43675a134ed7fd60b75b3f162cdb38671f63e0532e7a08a38829d7655c90620c"
+    "digest": "sha256:05fbecb08f0d6d921b2808b0104ed825e3c0e67807efd5b95a38083779f6c285"
   },
   "layers": [
     {
       "mediaType": "application/vnd.dev.cosign.simplesigning.v1+json",
       "size": 606,
-      "digest": "sha256:87c0a76024369681d1130ba11234a51f08cdd92356201911fe5f28c69316985e",
+      "digest": "sha256:561222396fbe725acde46e728adc5aa8069942c201787a22ce6fc286ecc96f0a",
       "annotations": {
-        "dev.cosignproject.cosign/signature": "MEYCIQDyPCd5RpDoDgWaH686cCMh0T3CG5dYx8JBn/7P/inn3AIhAN0/vhcLNV1OWfn1mX2j1VgmjcT4KhrjNlg1XVo0NlGx"
+        "dev.cosignproject.cosign/signature": "MEUCIFCXprEXIMQBX2+JWFq5PMzpbxiwUekGoRCBvgXmsI1hAiEA+sVy/bnyuQpybmisw0rOtUC5f1xzqVrHDBE9YqpIun8="
       }
     }
   ]
@@ -126,21 +124,20 @@ $ skopeo inspect --raw docker://$(cosign triangulate --type=signature $IMAGE_DIG
 
 # now verify the attestation that is cross checked with the rego in `policy.rego` (cosign_verify/policy.rego)
 #  (all that this rego validates is if foo=bar is present in the predicate (which we did during the cloud build steps))
-cosign verify-attestation --insecure-ignore-tlog=true --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego    \
-      us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646   | jq '.'
+cosign verify-attestation --insecure-ignore-tlog=true --key /tmp/kms_pub.pem --policy cosign_verify/policy.rego  $IMAGE_HASH   | jq '.'
 
 
-Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646  --
+Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
 {
   "payloadType": "application/vnd.in-toto+json",
-  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJodHRwczovL2Nvc2lnbi5zaWdzdG9yZS5kZXYvYXR0ZXN0YXRpb24vdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoidXMtY2VudHJhbDEtZG9ja2VyLnBrZy5kZXYvYnVpbGRlci0zOTUzMDMvcmVwbzEvdGVlIiwiZGlnZXN0Ijp7InNoYTI1NiI6ImM1OGVkOGFlNjcwNDIwZWQ5Njk3ZDgzZTdhN2YzYWE1NzRjOTgyOWQ4ZjhlNmVmYWUwZDUxYWJkYTA1MDdhYTAifX1dLCJwcmVkaWNhdGUiOnsiRGF0YSI6InsgXCJwcm9qZWN0aWRcIjogXCJidWlsZGVyLTM5NTMwM1wiLCBcImJ1aWxkaWRcIjogXCIyMDYzNThiYS1lMTJjLTRkNjktYmJjNi1kYTNhZmEwMTA1ZjFcIiwgXCJmb29cIjpcImJhclwiLCBcImNvbW1pdHNoYVwiOiBcImY1NmNkMWNkNDI3OGVhNGFkZDJkY2E3NGI1ZmNjOTc2OGU2YjMyMzRcIn0iLCJUaW1lc3RhbXAiOiIyMDIzLTEwLTA2VDEyOjQ5OjQ0WiJ9fQ==",
+  "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjAuMSIsInByZWRpY2F0ZVR5cGUiOiJodHRwczovL2Nvc2lnbi5zaWdzdG9yZS5kZXYvYXR0ZXN0YXRpb24vdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoidXMtY2VudHJhbDEtZG9ja2VyLnBrZy5kZXYvYnVpbGRlci0zOTUzMDMvcmVwbzEvdGVlIiwiZGlnZXN0Ijp7InNoYTI1NiI6IjYwY2IzN2MyNDlmZTM2OTVjMzY2MGU0MzFhNjBiZjhlODY4NDk4OWJmMTg4Mjc4NmNjNjczY2U5MzNlMjc4NDkifX1dLCJwcmVkaWNhdGUiOnsiRGF0YSI6InsgXCJwcm9qZWN0aWRcIjogXCJidWlsZGVyLTM5NTMwM1wiLCBcImJ1aWxkaWRcIjogXCI0OTllZmJhMy0xZTM5LTRhNjEtYmY3ZC03MjgyZjZlMjRlOTFcIiwgXCJmb29cIjpcImJhclwiLCBcImNvbW1pdHNoYVwiOiBcIjhlODhhYWM1ODQxMWJiNGZjYTdiNzVlOTRmMjc3MTY3YzhiNGY5NjBcIn0iLCJUaW1lc3RhbXAiOiIyMDIzLTEyLTE5VDIwOjExOjMxWiJ9fQ==",
   "signatures": [
     {
       "keyid": "",
-      "sig": "MEQCIHK/0CFk+Z4eVPr3zfoD/JhjnaBgWnQwNSa9Ho5ujFvKAiA9s99CbAlKWcm6S9mu8oJ9RvU6/qeBl8C2cZglvXdSzw=="
+      "sig": "MEUCIEQunEL++iSlxTwq9anjaeRox/J8qgGXs6RAzhdEq12lAiEA5t9U5PbINoFmLQOKjvsBtUqO10VILvlI0EozSiTNCY4="
     }
   ]
 }
@@ -155,13 +152,13 @@ The following checks were performed on each of these signatures:
     {
       "name": "us-central1-docker.pkg.dev/builder-395303/repo1/tee",
       "digest": {
-        "sha256": "1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 "
+        "sha256": "60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849"
       }
     }
   ],
   "predicate": {
-    "Data": "{ \"projectid\": \"builder-395303\", \"buildid\": \"206358ba-e12c-4d69-bbc6-da3afa0105f1\", \"foo\":\"bar\", \"commitsha\": \"f56cd1cd4278ea4add2dca74b5fcc9768e6b3234\"}",
-    "Timestamp": "2023-10-06T12:49:44Z"
+    "Data": "{ \"projectid\": \"builder-395303\", \"buildid\": \"499efba3-1e39-4a61-bf7d-7282f6e24e91\", \"foo\":\"bar\", \"commitsha\": \"8e88aac58411bb4fca7b75e94f277167c8b4f960\"}",
+    "Timestamp": "2023-12-19T20:11:31Z"
   }
 }
 ```
@@ -230,50 +227,55 @@ The container `sbom` is generated at build time and saved in the container regis
 
 * [syft/1725](https://github.com/anchore/syft/issues/1725)
 
-`kaniko` based builds, however, shows
+`kaniko` based builds, however, shows (note the image hash used is only if `kaniko` is used, the rest of the examples in this page uses `bazel`)
 
 ```bash
-$ syft packages    us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 
+$ syft packages    us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:51af5e192f5c1f6debf16ec90764fe0dcd96e187a4fdd8d1175e3a2f483fb7a0 
 
- ✔ Loaded image                                                                                                                                                                                    us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:1447781b9a6fd0a09a6352c10efaffaf6a67d2d12940b56d00cb38c5b56ad646 
- ✔ Parsed image                                                                                                                                                                                                                                        sha256:af36819d94b589d2418f38e0b329bdfdd3ef36a621dbee61f66f131fc904b988
- ✔ Cataloged packages              [34 packages]  
+ ✔ Pulled image                    
+ ✔ Loaded image                                                                                                                                                                                                                                          us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:51af5e192f5c1f6debf16ec90764fe0dcd96e187a4fdd8d1175e3a2f483fb7a0
+ ✔ Parsed image                                                                                                                                                                                                                                                                                              sha256:60381d69ccc70a0bd0c3ccba30ce299256f03561fa807011cf3aa044c5181025
+ ✔ Cataloged packages              [39 packages]  
 NAME                                                VERSION                             TYPE      
 base-files                                          11.1+deb11u7                        deb        
-cloud.google.com/go                                 v0.107.0                            go-module  
+cloud.google.com/go                                 v0.110.10                           go-module  
 cloud.google.com/go/compute/metadata                v0.2.3                              go-module  
-cloud.google.com/go/iam                             v0.8.0                              go-module  
-cloud.google.com/go/kms                             v1.6.0                              go-module  
-cloud.google.com/go/logging                         v1.6.1                              go-module  
-cloud.google.com/go/longrunning                     v0.4.1                              go-module  
-cloud.google.com/go/pubsub                          v1.27.1                             go-module  
-github.com/golang-jwt/jwt/v4                        v4.5.0                              go-module  
-github.com/golang/groupcache                        v0.0.0-20200121045136-8c9f03a8e57e  go-module  
-github.com/golang/protobuf                          v1.5.2                              go-module  
-github.com/google/go-cmp                            v0.5.9                              go-module  
-github.com/googleapis/enterprise-certificate-proxy  v0.2.3                              go-module  
-github.com/googleapis/gax-go/v2                     v2.7.0                              go-module  
-github.com/gorilla/mux                              v1.8.0                              go-module  
+cloud.google.com/go/iam                             v1.1.5                              go-module  
+cloud.google.com/go/kms                             v1.15.5                             go-module  
+cloud.google.com/go/logging                         v1.8.1                              go-module  
+cloud.google.com/go/longrunning                     v0.5.4                              go-module  
+cloud.google.com/go/pubsub                          v1.33.0                             go-module  
+github.com/golang-jwt/jwt/v5                        v5.2.0                              go-module  
+github.com/golang/groupcache                        v0.0.0-20210331224755-41bb18bfe9da  go-module  
+github.com/golang/protobuf                          v1.5.3                              go-module  
+github.com/google/s2a-go                            v0.1.7                              go-module  
+github.com/googleapis/enterprise-certificate-proxy  v0.3.2                              go-module  
+github.com/googleapis/gax-go/v2                     v2.12.0                             go-module  
+github.com/gorilla/mux                              v1.8.1                              go-module  
 github.com/lestrrat/go-jwx                          v0.9.1                              go-module  
 github.com/lestrrat/go-pdebug                       v0.0.0-20180220043741-569c97477ae8  go-module  
 github.com/pkg/errors                               v0.9.1                              go-module  
 github.com/salrashid123/confidential_space/app      (devel)                             go-module  
+github.com/salrashid123/confidential_space/claims   v0.0.0-20231113123744-44f929093c61  go-module  
 go.opencensus.io                                    v0.24.0                             go-module  
-golang.org/x/net                                    v0.6.0                              go-module  
-golang.org/x/oauth2                                 v0.5.0                              go-module  
-golang.org/x/sync                                   v0.1.0                              go-module  
-golang.org/x/sys                                    v0.5.0                              go-module  
-golang.org/x/text                                   v0.7.0                              go-module  
-google.golang.org/api                               v0.110.0                            go-module  
-google.golang.org/genproto                          v0.0.0-20230209215440-0dfe4f8abfcc  go-module  
-google.golang.org/grpc                              v1.53.0                             go-module  
-google.golang.org/protobuf                          v1.28.1                             go-module  
+golang.org/x/crypto                                 v0.16.0                             go-module  
+golang.org/x/net                                    v0.19.0                             go-module  
+golang.org/x/oauth2                                 v0.15.0                             go-module  
+golang.org/x/sync                                   v0.5.0                              go-module  
+golang.org/x/sys                                    v0.15.0                             go-module  
+golang.org/x/text                                   v0.14.0                             go-module  
+golang.org/x/time                                   v0.5.0                              go-module  
+google.golang.org/api                               v0.152.0                            go-module  
+google.golang.org/genproto                          v0.0.0-20231120223509-83a465c0220f  go-module  
+google.golang.org/genproto/googleapis/api           v0.0.0-20231127180814-3a041ad873d4  go-module  
+google.golang.org/genproto/googleapis/rpc           v0.0.0-20231120223509-83a465c0220f  go-module  
+google.golang.org/grpc                              v1.59.0                             go-module  
+google.golang.org/protobuf                          v1.31.0                             go-module  
 libc6                                               2.31-13+deb11u6                     deb        
 libssl1.1                                           1.1.1n-0+deb11u4                    deb        
 netbase                                             6.3                                 deb        
 openssl                                             1.1.1n-0+deb11u4                    deb        
 tzdata                                              2021a-1+deb11u10                    deb
-
 ```
 
 The sboms also include signatures verfiying its authenticity.  

@@ -154,7 +154,7 @@ You don't _have to_ use `bazel` or `kaniko` to build an image (you can just use 
 
 In this example using `bazel`, the code will always produce a hash of  (see [reproducible Builds](#reproducible-builds))
 
-* `tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01`
+* `tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849`
 
 For more info, see
 
@@ -318,7 +318,32 @@ Using `cosign` is a completely optional step used to add verification signatures
 
 Once the image is built and each collaborator is in agreement that the code contained in image 
 
-- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01` 
+- `us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849` 
+
+Note, the image cited is the index 
+
+```bash
+$ crane manifest us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849
+
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "size": 2586,
+      "digest": "sha256:8e74897e8c7fcc126e8fa9ec474f03941c0a66d6bdacceb58f691af01838a6cc",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      }
+    }
+  ]
+}
+
+## get the actual image manifest
+# crane manifest us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee@sha256:8e74897e8c7fcc126e8fa9ec474f03941c0a66d6bdacceb58f691af01838a6cc | jq '.'
+```
 
 isn't going to do anything malicious like exfiltrate their precious data, they can authorize that container to run in `Confidential Space` managed by an Operator.
 
@@ -564,7 +589,7 @@ $ gcloud compute images list --project confidential-space-images --no-standard-i
 #   --shielded-secure-boot --tags=tee-vm --project $OPERATOR_PROJECT_ID \
 #   --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
 #   --image-project=confidential-space-images \
-#   --image=confidential-space-231200 --network=teenetwork --no-address \
+#   --image=confidential-space-231201 --network=teenetwork --no-address \
 #   --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
 #   --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true
 
@@ -577,9 +602,9 @@ gcloud compute instances create vm1 --confidential-compute \
  --shielded-secure-boot --tags=tee-vm --project $OPERATOR_PROJECT_ID \
  --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
  --image-project=confidential-space-images \
- --image=confidential-space-231200 --network=teenetwork \
+ --image=confidential-space-231201 --network=teenetwork \
  --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
- --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true
+ --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true~tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee
 
 export EXTERNAL_IP=`gcloud compute instances describe vm1 --project $OPERATOR_PROJECT_ID --zone=us-central1-a  --format='get(networkInterfaces[0].accessConfigs.natIP)'`
 echo $EXTERNAL_IP
@@ -910,15 +935,6 @@ GCP Cloud Logging must always be associated to a container project where the log
 
 In addition, the logs could even get written to any collaborator's GCP project.  In this mode, the container application will use workload identify federation to authenticate to the collaborators GCP project and use its logging api.
 
-
-The `Launcher Spec` log line shown below
-
-![image/launch_spec.png](images/launch_spec.png)
-
-Describes a go struct denoting the [startup metadata](https://cloud.google.com/compute/confidential-vm/docs/reference/cs-options#cs-metadata):
-
-(basically the specifications/signals sent during startup of the container)
-
 ### Reproducible Builds
 
 Building an container image using `docker` is not deterministic and will produce different image hash values.
@@ -949,7 +965,7 @@ There are several ways to do this
 Note, i've observed a build using bazel and kaniko produces the different hashes for the same code...not sure what the case is (implementation or have some small variation i didn't account for; likely the override stated below)...eitherway, i did see builds are self-consistent and reproducible using the same tool
 
 * Kaniko produces `tee@sha256:51af5e192f5c1f6debf16ec90764fe0dcd96e187a4fdd8d1175e3a2f483fb7a0`
-* Bazel produces `tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01`
+* Bazel produces `tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849`
 
 
 #### Credential Injection
@@ -1438,7 +1454,7 @@ gcloud compute instances create vm1 --confidential-compute \
  --shielded-secure-boot --tags=tee-vm \
  --maintenance-policy=TERMINATE --scopes=cloud-platform  --zone=us-central1-a \
  --image-project=confidential-space-images \
- --image-family=confidential-space --network=teenetwork \
+ --image=confidential-space-231201 --network=teenetwork \
  --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
  --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true~tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee
 ```
@@ -1469,7 +1485,7 @@ decode the `Payload`
       "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
     },
     "image": {
-      "docker-manifest-digest": "sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01"
+      "docker-manifest-digest": "sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2"
     },
     "type": "cosign container image signature"
   },
@@ -1499,7 +1515,7 @@ $ cosign verify --key /tmp/kms_pub.pem \
    --insecure-ignore-tlog=true \
    $IMAGE_HASH | jq '.'
 
-Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01 --
+Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -1510,7 +1526,7 @@ The following checks were performed on each of these signatures:
         "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:c9acaed33baa94cdaf946e2905c9c45ab08db5951cc8455cb4c532f1be093e01"
+        "docker-manifest-digest": "sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2"
       },
       "type": "cosign container image signature"
     },
