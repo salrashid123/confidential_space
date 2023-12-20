@@ -1467,8 +1467,8 @@ basically, the attestation server runs something like this after reading in `tee
 $ cosign download signature $IMAGE_HASH | jq '.'
 
 {
-  "Base64Signature": "MEUCIQD01hcf6D8kWUB5U44y/7O9I7FLDgwcb/EVuMoed7eeVgIgHSvTA0WFgZxG/63bCw1Lw9m7rJ8mFqoLwTKEOiUq1Ec=",
-  "Payload": "eyJjcml0aWNhbCI6eyJpZGVudGl0eSI6eyJkb2NrZXItcmVmZXJlbmNlIjoidXMtY2VudHJhbDEtZG9ja2VyLnBrZy5kZXYvYnVpbGRlci0zOTUzMDMvcmVwbzEvdGVlIn0sImltYWdlIjp7ImRvY2tlci1tYW5pZmVzdC1kaWdlc3QiOiJzaGEyNTY6YzlhY2FlZDMzYmFhOTRjZGFmOTQ2ZTI5MDVjOWM0NWFiMDhkYjU5NTFjYzg0NTVjYjRjNTMyZjFiZTA5M2UwMSJ9LCJ0eXBlIjoiY29zaWduIGNvbnRhaW5lciBpbWFnZSBzaWduYXR1cmUifSwib3B0aW9uYWwiOnsiZGV2LmNvc2lnbnByb2plY3QuY29zaWduL3B1YiI6IkxTMHRMUzFDUlVkSlRpQlFWVUpNU1VNZ1MwVlpMUzB0TFMwS1RVWnJkMFYzV1VoTGIxcEplbW93UTBGUldVbExiMXBKZW1vd1JFRlJZMFJSWjBGRmJrcHJlRkJyVGtKa2MxUm1kVkZ1V2twQmJVVTJkRlpGYjNOVVJ3cFpaVzFVWVZGc0t6WXdUMHhTYzNsdFZVUTRSMlpVUTI5blIzSm5Va2h0VGxSaFNXbFdlbXRRWWxkWlFqTnBTekkzVFhWWmEwRkhlVTFSUFQwS0xTMHRMUzFGVGtRZ1VGVkNURWxESUV0RldTMHRMUzB0Q2ciLCJkZXYuY29zaWducHJvamVjdC5jb3NpZ24vc2lnYWxnIjoiRUNEU0FfUDI1Nl9TSEEyNTYiLCJrZXkxIjoidmFsdWUxIn19",
+  "Base64Signature": "MEUCIFCXprEXIMQBX2+JWFq5PMzpbxiwUekGoRCBvgXmsI1hAiEA+sVy/bnyuQpybmisw0rOtUC5f1xzqVrHDBE9YqpIun8=",
+  "Payload": "eyJjcml0aWNhbCI6eyJpZGVudGl0eSI6eyJkb2NrZXItcmVmZXJlbmNlIjoidXMtY2VudHJhbDEtZG9ja2VyLnBrZy5kZXYvYnVpbGRlci0zOTUzMDMvcmVwbzEvdGVlIn0sImltYWdlIjp7ImRvY2tlci1tYW5pZmVzdC1kaWdlc3QiOiJzaGEyNTY6NjBjYjM3YzI0OWZlMzY5NWMzNjYwZTQzMWE2MGJmOGU4Njg0OTg5YmYxODgyNzg2Y2M2NzNjZTkzM2UyNzg0OSJ9LCJ0eXBlIjoiY29zaWduIGNvbnRhaW5lciBpbWFnZSBzaWduYXR1cmUifSwib3B0aW9uYWwiOnsiZGV2LmNvc2lnbnByb2plY3QuY29zaWduL3B1YiI6IkxTMHRMUzFDUlVkSlRpQlFWVUpNU1VNZ1MwVlpMUzB0TFMwS1RVWnJkMFYzV1VoTGIxcEplbW93UTBGUldVbExiMXBKZW1vd1JFRlJZMFJSWjBGRmJrcHJlRkJyVGtKa2MxUm1kVkZ1V2twQmJVVTJkRlpGYjNOVVJ3cFpaVzFVWVZGc0t6WXdUMHhTYzNsdFZVUTRSMlpVUTI5blIzSm5Va2h0VGxSaFNXbFdlbXRRWWxkWlFqTnBTekkzVFhWWmEwRkhlVTFSUFQwS0xTMHRMUzFGVGtRZ1VGVkNURWxESUV0RldTMHRMUzB0Q2ciLCJkZXYuY29zaWducHJvamVjdC5jb3NpZ24vc2lnYWxnIjoiRUNEU0FfUDI1Nl9TSEEyNTYiLCJrZXkxIjoidmFsdWUxIn19",
   "Cert": null,
   "Chain": null,
   "Bundle": null,
@@ -1485,7 +1485,7 @@ decode the `Payload`
       "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
     },
     "image": {
-      "docker-manifest-digest": "sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2"
+      "docker-manifest-digest": "sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849"
     },
     "type": "cosign container image signature"
   },
@@ -1515,7 +1515,7 @@ $ cosign verify --key /tmp/kms_pub.pem \
    --insecure-ignore-tlog=true \
    $IMAGE_HASH | jq '.'
 
-Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2 --
+Verification for us-central1-docker.pkg.dev/builder-395303/repo1/tee@sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
   - The signatures were verified against the specified public key
@@ -1526,7 +1526,7 @@ The following checks were performed on each of these signatures:
         "docker-reference": "us-central1-docker.pkg.dev/builder-395303/repo1/tee"
       },
       "image": {
-        "docker-manifest-digest": "sha256:d422f9fad90e4538bff8e5e18e34ce9f514276873807a43c7df83c7a3166ffc2"
+        "docker-manifest-digest": "sha256:60cb37c249fe3695c3660e431a60bf8e8684989bf1882786cc673ce933e27849"
       },
       "type": "cosign container image signature"
     },
@@ -1539,14 +1539,14 @@ The following checks were performed on each of these signatures:
 ]
 ```
 
-Once the verfication is done, the attestation jwt will contain a claim denoting valid signatures and public keys:
+Once the verfication is done, the attestation jwt will contain a claim denoting verified signatures and public keys:
 
 ```json
 {
   "image_signatures": [
     {
       "signature_algorithm": "ECDSA_P256_SHA256",
-      "signature": "MEUCIQD01hcf6D8kWUB5U44y/7O9I7FLDgwcb/EVuMoed7eeVgIgHSvTA0WFgZxG/63bCw1Lw9m7rJ8mFqoLwTKEOiUq1Ec=",
+      "signature": "MEUCIFCXprEXIMQBX2+JWFq5PMzpbxiwUekGoRCBvgXmsI1hAiEA+sVy/bnyuQpybmisw0rOtUC5f1xzqVrHDBE9YqpIun8=",
       "key_id": "fc3cd070b22b02942d8216257f6c917d122eb2d6691027b3e8160306a4c71072",
     }
   ]
