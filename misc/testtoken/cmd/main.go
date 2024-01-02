@@ -24,7 +24,7 @@ func main() {
 	// create a custom token
 	tts := &tk.CustomToken{
 		Audience:  "https://myaudience",
-		Nonces:    []string{"foo", "bar"},
+		Nonces:    []string{"123456789", "1122334455667788"},
 		TokenType: tk.TOKEN_TYPE_OIDC,
 	}
 	customTokenValue, err := tk.GetCustomAttestation(tts)
@@ -61,7 +61,7 @@ func main() {
 		HardwareModel:         "GCP_AMD_SEV",
 		OEMID:                 11129,
 		Secboot:               true,
-		EATNonce:              []string{"foo", "bar"},
+		EATNonce:              []string{"123456789", "1122334455667788"},
 		Submods: csclaims.SubmodClaims{
 			ConfidentialSpace: csclaims.ConfidentialSpaceClaims{
 				SupportAttributes: []string{"LATEST", "STABLE", "USABLE"},

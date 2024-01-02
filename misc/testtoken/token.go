@@ -71,6 +71,7 @@ const (
 	TOKEN_TYPE_UNSPECIFIED string = "UNSPECIFIED"
 )
 
+// https://cloud.google.com/confidential-computing/confidential-vm/docs/reference/cs-token-claims#supported-claims
 type CustomToken struct {
 	Audience  string   `json:"audience"`
 	Nonces    []string `json:"nonces"`
@@ -85,9 +86,19 @@ type key struct {
 }
 
 func GetAttestation(csclaims csclaims.Claims) (string, error) {
+
+	for _, v := range csclaims.EATNonce {
+		if len([]byte(v)) < 9 || len([]byte(v)) > 74 {
+			return "", errors.New("Custom nonce must be between 10 and 74 bytes")
+		}
+	}
+	if len(csclaims.EATNonce) > 6 {
+		return "", errors.New("Maximum  of 6 Custom nonces are allowed")
+	}
+
 	block, _ := pem.Decode([]byte(rsaPrivKey))
 	if block == nil {
-		return "", fmt.Errorf("Error decoding private key")
+		return "", fmt.Errorf("Error decoding private key\n")
 	}
 	privKeyRSA, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
@@ -106,6 +117,15 @@ func GetAttestation(csclaims csclaims.Claims) (string, error) {
 }
 
 func GetCustomAttestation(tokenRequest *CustomToken) (string, error) {
+
+	for _, v := range tokenRequest.Nonces {
+		if len([]byte(v)) < 9 || len([]byte(v)) > 74 {
+			return "", errors.New("Custom nonce must be between 10 and 74 bytes")
+		}
+	}
+	if len(tokenRequest.Nonces) > 6 {
+		return "", errors.New("Maximum  of 6 Custom nonces are allowed")
+	}
 
 	block, _ := pem.Decode([]byte(rsaPrivKey))
 	if block == nil {

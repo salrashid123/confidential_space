@@ -4,6 +4,13 @@ This repo also contains a sample jwt generator which creates a fake confidential
 
 Use this to test/verify the claims provided by the process credential or provider locally.
 
+Each nonce must be checked to ensure it is between 10 and 74 bytes long:
+
+- [Custom Nonce](https://cloud.google.com/confidential-computing/confidential-vm/docs/reference/cs-token-claims#supported-claims)
+
+```
+The values are echoed from the token options sent in the custom token request. Each nonce must be between 10 to 74 bytes inclusive. A maximum of six nonces are allowed.
+````
 
 The fake oidc server is from [DIY OIDC Server](ttps://github.com/salrashid123/diy_oidc)
 
@@ -44,7 +51,7 @@ func main() {
 	fmt.Println("starting")
 	tts := &tk.CustomToken{
 		Audience: "https://myaudience",
-		Nonces:   []string{"foo", "bar"},
+		Nonces:    []string{"123456789", "1122334455667788"},
 		TokenType: tk.TOKEN_TYPE_OIDC,			
 	}
 	customTokenValue, err := tk.GetCustomAttestation(tts)

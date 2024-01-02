@@ -240,21 +240,21 @@ gsutil iam ch \
 # gcloud builds submit --config=cloudbuild_bazel.yaml
 
 ## for local Bazel
+## see 'reproducible image' section below
 ### generate bazel dependencies
+
 # docker run   -e USER="$(id -u)" \
-#    -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output \
+#    -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output:rw \
 #     -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
-#     gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a \
-#      --output_user_root=/tmp/build_output   run :gazelle -- update-repos -from_file=go.mod -prune=true -to_macro=repositories.bzl%go_repositories
+#     gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd \
+#      --output_base=/tmp/build_output   run :gazelle -- update-repos -from_file=go.mod -prune=true -to_macro=repositories.bzl%go_repositories
 
 # # build
-# docker run   -e USER="$(id -u)" \
-#    -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output \
-#     -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
-#     gcr.io/cloud-builders/bazel@sha256:604cf4bc0d197a2bec4b1d4f92d1010d93298168b7f27d7e7edaad8259e18a3a \
-#      --output_user_root=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :server
-
-# skopeo inspect --format "{{.Name}}@{{.Digest}}"  docker-daemon:us-central1-docker.pkg.dev/builder-project/repo1/tee:server
+# docker run  --net=host -e USER="$(id -u)" \
+#       -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output:rw \
+#       -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
+#       gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd \
+#         --output_base=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :tar-oci-index
 
 ### for Kaniko
 
@@ -591,7 +591,7 @@ $ gcloud compute images list --project confidential-space-images --no-standard-i
 #   --image-project=confidential-space-images \
 #   --image=confidential-space-231201 --network=teenetwork --no-address \
 #   --service-account=operator-svc-account@$OPERATOR_PROJECT_ID.iam.gserviceaccount.com \
-#   --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true
+#   --metadata ^~^tee-image-reference=$IMAGE_HASH~tee-restart-policy=Never~tee-container-log-redirect=true~tee-signed-image-repos=us-central1-docker.pkg.dev/$BUILDER_PROJECT_ID/repo1/tee
 
 ### B) Using mTLS with external IP
 #### first allow your (or in this case all), IP's to connect
@@ -877,6 +877,14 @@ func getCustomAttestation(tokenRequest customToken) (string, error) {
 
 Just note, the `eat_nonce` value can be `string` or `[]string` in the JSON response depending if single or multple values are sent in.
 
+Finally, each nonce must be checked to ensure it is between 10 and 74 bytes long:
+
+- [Custom Nonce](https://cloud.google.com/confidential-computing/confidential-vm/docs/reference/cs-token-claims#supported-claims)
+
+```
+The values are echoed from the token options sent in the custom token request. Each nonce must be between 10 to 74 bytes inclusive. A maximum of six nonces are allowed.
+````
+
 #### Authenticating with other Cloud Providers
 
 The easiest way to access resoruces in other providers is to use the custom JWT tokens and federation.  Basically, just configure the remote provider to accept the claims and OIDC token as described by the custom JWT as shown in the previous section.
@@ -947,11 +955,44 @@ There are several ways to do this
 
 * `kaniko`
 
-    This is the default mechanism shown in this repo. Images based of kaniko can be made reproducible via flag [link](https://github.com/salrashid123/cosign_kaniko_cloud_build) 
+    This is the alternate mechanism shown in this repo. Images based of kaniko can be made reproducible via flag [link](https://github.com/salrashid123/cosign_kaniko_cloud_build) 
 
 * `bazel`
    
-   Bazel can build these types of images too but...see the sad state of bazel's [rules_docker](https://github.com/bazelbuild/rules_docker#status) and even then, using [rules_go](https://github.com/bazelbuild/rules_go/issues/3467) is challenging.
+   The default mechanism in this repo is to build the app using `Bazel` and [rules_oci](https://github.com/bazel-contrib/rules_oci) 
+
+   To verify the image hash locally, edit `BUILD.bazel` and set the `oci_push()` target to use `repository = "localhost:4000/tee`
+
+   Then run a local registry like `crane`: 
+
+```bash
+   crane registry serve --address :4000
+
+   # build
+    docker run  --net=host -e USER="$(id -u)" \
+        -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output:rw \
+        -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
+        gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd \
+          --output_base=/tmp/build_output   run  --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 :tar-oci-index
+    
+    ## print the output tarball (which will be bazel-out/k8-fastbuild/bin/tar-oci-index/tarball.tar)
+    docker run  --net=host -e USER="$(id -u)" \
+        -v `pwd`:/src/workspace   -v /tmp/build_output:/tmp/build_output:rw \
+        -v /var/run/docker.sock:/var/run/docker.sock   -w /src/workspace  \
+        gcr.io/cloud-builders/bazel@sha256:7c34604572d4f001928b98f2b04e2feaebce67b7933e4182b817dcbfe9904bcd \
+          --output_base=/tmp/build_output  cquery --output=files :tar-oci-index
+
+    
+    rm -rf /tmp/image_dir && mkdir -p /tmp/image_dir && tar xvf bazel-out/k8-fastbuild/bin/tar-oci-index/tarball.tar  --directory /tmp/image_dir
+    
+    crane push  /tmp/image_dir localhost:4000/test:server --image-refs=/tmp/ref.txt
+    cat /tmp/ref.txt
+    # or
+    # skopeo copy --dest-tls-verify=false  --all -f oci --preserve-digests oci-archive:bazel-out/k8-fastbuild/bin/tar-oci-index/tarball.tar    docker://localhost:4000/test:server
+
+    crane manifest `cat /tmp/ref.txt` | jq '.'  
+   ```
+
 
 * `ko`
 

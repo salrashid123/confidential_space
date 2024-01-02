@@ -67,8 +67,8 @@ type tokenResponse struct {
 }
 
 const (
-	//jwksURL = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
-	jwksURL = "https://idp-on-cloud-run-3kdezruzua-uc.a.run.app/certs"
+	jwksURL = "https://www.googleapis.com/service_accounts/v1/metadata/jwk/signer@confidentialspace-sign.iam.gserviceaccount.com"
+	//jwksURL = "https://idp-on-cloud-run-3kdezruzua-uc.a.run.app/certs"
 	RFC3339 = "2006-01-02T15:04:05Z07:00"
 
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations.html
